@@ -41,7 +41,9 @@ import org.hl7.fhir.igtools.publisher.Publisher;
 import org.hl7.fhir.igtools.publisher.Publisher.CacheOption;
 import org.hl7.fhir.r5.context.IWorkerContext.ILoggingService;
 import org.hl7.fhir.utilities.IniFile;
+
 import org.hl7.fhir.utilities.Utilities;
+import org.hl7.fhir.utilities.settings.FhirSettings;
 
 public class IGPublisherFrame extends javax.swing.JFrame {
 
@@ -278,7 +280,8 @@ public class IGPublisherFrame extends javax.swing.JFrame {
     public void logDebugMessage(LogCategory category, String msg) {
       publish(LOG_PREFIX+msg);
       
-    }    
+    }
+
     @Override
     protected void process(List<String> msgs) {
       for (String msg : msgs) {
@@ -301,6 +304,11 @@ public class IGPublisherFrame extends javax.swing.JFrame {
       btnQA.setEnabled(true);      
       btnIG.setEnabled(true);      
       btnExecute.setLabel("Execute");
+    }
+
+    @Override
+    public boolean isDebugLogging() {
+      return false;
     }
 
 
@@ -349,7 +357,7 @@ public class IGPublisherFrame extends javax.swing.JFrame {
   
   protected void btnGetHelpClick(ActionEvent evt) {
     try {
-      String text = Publisher.buildReport((String) cbxIGName.getSelectedItem(), null, fullLog.toString(), qa == null ? null : Utilities.changeFileExt(qa, ".txt"), Publisher.txServerProd);
+      String text = Publisher.buildReport((String) cbxIGName.getSelectedItem(), null, fullLog.toString(), qa == null ? null : Utilities.changeFileExt(qa, ".txt"), FhirSettings.getTxFhirProduction());
       StringSelection stringSelection = new StringSelection(text);
       Clipboard clpbrd = Toolkit.getDefaultToolkit().getSystemClipboard();
       clpbrd.setContents(stringSelection, null);

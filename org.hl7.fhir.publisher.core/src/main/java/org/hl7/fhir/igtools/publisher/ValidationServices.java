@@ -40,17 +40,18 @@ import org.hl7.fhir.r5.model.CanonicalResource;
 import org.hl7.fhir.r5.model.CodeSystem;
 import org.hl7.fhir.r5.model.ElementDefinition;
 import org.hl7.fhir.r5.model.NamingSystem;
+import org.hl7.fhir.r5.model.NamingSystem.NamingSystemIdentifierType;
+import org.hl7.fhir.r5.model.NamingSystem.NamingSystemUniqueIdComponent;
 import org.hl7.fhir.r5.model.OperationDefinition;
 import org.hl7.fhir.r5.model.Questionnaire;
 import org.hl7.fhir.r5.model.Resource;
 import org.hl7.fhir.r5.model.StructureDefinition;
+import org.hl7.fhir.r5.model.StructureMap;
 import org.hl7.fhir.r5.model.ValueSet;
-import org.hl7.fhir.r5.model.NamingSystem.NamingSystemIdentifierType;
-import org.hl7.fhir.r5.model.NamingSystem.NamingSystemUniqueIdComponent;
 import org.hl7.fhir.r5.terminologies.ImplicitValueSets;
 import org.hl7.fhir.r5.utils.validation.IResourceValidator;
-import org.hl7.fhir.r5.utils.validation.IValidatorResourceFetcher;
 import org.hl7.fhir.r5.utils.validation.IValidationPolicyAdvisor;
+import org.hl7.fhir.r5.utils.validation.IValidatorResourceFetcher;
 import org.hl7.fhir.r5.utils.validation.constants.BindingKind;
 import org.hl7.fhir.r5.utils.validation.constants.CodedContentValidationPolicy;
 import org.hl7.fhir.r5.utils.validation.constants.ContainedReferenceValidationPolicy;
@@ -70,15 +71,17 @@ public class ValidationServices implements IValidatorResourceFetcher, IValidatio
   private List<String> otherUrls = new ArrayList<>();
   private List<String> mappingUrls = new ArrayList<>();
   private boolean bundleReferencesResolve;
+  private List<SpecMapManager> specMaps;
   
   
-  public ValidationServices(IWorkerContext context, IGKnowledgeProvider ipg, List<FetchedFile> files, List<NpmPackage> packages, boolean bundleReferencesResolve) {
+  public ValidationServices(IWorkerContext context, IGKnowledgeProvider ipg, List<FetchedFile> files, List<NpmPackage> packages, boolean bundleReferencesResolve, List<SpecMapManager> specMaps) {
     super();
     this.context = context;
     this.ipg = ipg;
     this.files = files;
     this.packages = packages;
     this.bundleReferencesResolve = bundleReferencesResolve;
+    this.specMaps = specMaps;
     initOtherUrls();
   }
 
@@ -227,18 +230,30 @@ public class ValidationServices implements IValidatorResourceFetcher, IValidatio
       return true;
     }
     
-
-    for (CanonicalResource cr : context.allConformanceResources()) {
-      if (cr instanceof NamingSystem) {
-        if (hasURL((NamingSystem) cr, u)) {
-          // ignore the version?
+    if (url.contains("*")) {
+      // for now, this is only done for StructureMap
+      for (StructureMap map : context.fetchResourcesByType(StructureMap.class)) {
+        if (urlMatches(url, map.getUrl())) {
           return true;
         }
       }
     }
+
+    for (NamingSystem ns : context.fetchResourcesByType(NamingSystem.class)) {
+      if (hasURL(ns, u)) {
+        // ignore the version?
+        return true;
+      }
+    }
     
+    for (SpecMapManager sp : specMaps) {
+      String base = url.contains("#") ? url.substring(0, url.indexOf("#")) : url;
+      if (sp.hasTarget(base)) {
+        return true;
+      }
+    }
     if (u.startsWith("http://hl7.org/fhir")) {
-      if (Utilities.existsInList(u, org.hl7.fhir.r5.utils.BuildExtensions.allConsts())) {
+      if (org.hl7.fhir.r5.utils.BuildExtensions.allConsts().contains(u)) {
         return true;
       }
       try {
@@ -250,6 +265,12 @@ public class ValidationServices implements IValidatorResourceFetcher, IValidatio
     }
     return true;
   }
+  
+
+  private boolean urlMatches(String mask, String url) {
+    return url.length() > mask.length() && url.startsWith(mask.substring(0, mask.indexOf("*"))) && url.endsWith(mask.substring(mask.indexOf("*") + 1));
+  }
+
   
   private boolean hasURL(NamingSystem ns, String url) {
     for (NamingSystemUniqueIdComponent uid : ns.getUniqueId()) {

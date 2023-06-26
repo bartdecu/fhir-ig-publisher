@@ -37,6 +37,8 @@ import org.apache.commons.io.FileUtils;
 import org.apache.tools.ant.DefaultLogger;
 import org.apache.tools.ant.Project;
 import org.apache.tools.ant.ProjectHelper;
+import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_40_50;
+import org.hl7.fhir.convertors.factory.VersionConvertorFactory_40_50;
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.r5.formats.JsonParser;
 import org.hl7.fhir.r5.formats.XmlParser;
@@ -47,16 +49,17 @@ import org.hl7.fhir.r5.model.OperationOutcome.OperationOutcomeIssueComponent;
 import org.hl7.fhir.r5.model.Reference;
 import org.hl7.fhir.r5.utils.ToolingExtensions;
 import org.hl7.fhir.utilities.Utilities;
-import org.hl7.fhir.utilities.json.JsonTrackingParser;
+import org.hl7.fhir.utilities.json.JsonUtilities;
+import org.hl7.fhir.utilities.json.model.JsonArray;
+import org.hl7.fhir.utilities.json.model.JsonElement;
+import org.hl7.fhir.utilities.json.model.JsonObject;
+import org.hl7.fhir.utilities.json.model.JsonPrimitive;
+import org.hl7.fhir.utilities.json.model.JsonProperty;
 import org.hl7.fhir.utilities.npm.NpmPackage;
+import org.hl7.fhir.utilities.settings.FhirSettings;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.Source;
-
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonPrimitive;
 
 
 public class Template {
@@ -64,6 +67,7 @@ public class Template {
   public static final int IG_NONE = 0;
   public static final int IG_ANY = 1;
   public static final int IG_NO_RESOURCE = 2;
+  private static final boolean USE_R5_IG_FORMAT = false;
   
   private NpmPackage pack;
   private JsonObject configuration;
@@ -83,6 +87,7 @@ public class Template {
   private JsonArray preProcess;
   private String templateReason;
   private Set<String> summaryRows = new HashSet<>();
+  private Set<String> templateParams = new HashSet<>();
   
   /** unpack the template into /template 
    * 
@@ -101,20 +106,20 @@ public class Template {
     templateDir = Utilities.path(rootDir, "template");
 
     // ok, now templateDir has the content of the template
-    configuration = JsonTrackingParser.parseJsonFile(Utilities.path(templateDir, "config.json"));
+    configuration = org.hl7.fhir.utilities.json.parser.JsonParser.parseObjectFromFile(Utilities.path(templateDir, "config.json"));
     if (configuration.has("script")) {
-      script = configuration.get("script").getAsString();
+      script = configuration.asString("script");
       if (!configuration.has("targets"))
         throw new FHIRException("If a script is provided, then targets must be defined");
-      JsonObject targets = configuration.getAsJsonObject("targets");
+      JsonObject targets = configuration.getJsonObject("targets");
       if (targets.has("onLoad"))
-        targetOnLoad = targets.get("onLoad").getAsString();
+        targetOnLoad = targets.asString("onLoad");
       if (targets.has("onGenerate"))
-        targetOnGenerate = targets.get("onGenerate").getAsString();
+        targetOnGenerate = targets.asString("onGenerate");
       if (targets.has("onJekyll"))
-        targetOnJekyll = targets.get("onJekyll").getAsString();
+        targetOnJekyll = targets.asString("onJekyll");
       if (targets.has("onCheck"))
-        targetOnCheck = targets.get("onCheck").getAsString();
+        targetOnCheck = targets.asString("onCheck");
       File buildFile = new File(Utilities.path(templateDir, script));
       antProject = new Project();
 
@@ -128,9 +133,16 @@ public class Template {
       antProject.setProperty("ig.root", root);
       antProject.setProperty("ig.template", templateDir);
       antProject.setProperty("ig.scripts", Utilities.path(templateDir, "scripts"));
+      antProject.setProperty("ig.networkprohibited", Boolean.toString(FhirSettings.isProhibitNetworkAccess()));
       antProject.init();
     }
-
+    for (JsonProperty p : configuration.getProperties()) {
+      if (p.getName().startsWith("template-parameters")) {
+        for (JsonElement j : p.getValue().asJsonArray()) {
+          templateParams.add(j.asString());                  
+        }
+      }
+    }
     if (configuration.has("defaults")) {
       defaults = (JsonObject)configuration.get("defaults");
     }
@@ -143,12 +155,11 @@ public class Template {
       preProcess = (JsonArray)configuration.get("pre-process");
     }
     if (configuration.has("summaryRows")) {
-      for (String s : configuration.get("summaryRows").getAsString().split("\\ "))
+      for (String s : configuration.asString("summaryRows").split("\\ "))
       summaryRows.add(s);
     }
   }
 
-  
   public boolean hasPreProcess() {
     return preProcess != null;
   }
@@ -168,8 +179,8 @@ public class Template {
   public Collection<String> getFormats() {
     Collection<String> formatList = new ArrayList<String>();
     if (configuration.has("formats")) {
-      for (JsonElement format: configuration.getAsJsonArray("formats"))
-        formatList.add(format.getAsString());
+      for (JsonElement format: configuration.getJsonArray("formats"))
+        formatList.add(format.asString());
     } else {
       formatList.add("xml");
       formatList.add("json");
@@ -190,8 +201,8 @@ public class Template {
       xmlOutcomes.delete();
     String sfn = Utilities.path(templateDir, target + "-ig-working.");
     String fn = Utilities.path(templateDir, target + "-ig-updated.");
-    File jsonIg = new File(Utilities.path(templateDir, sfn +"json"));
-    File xmlIg = new File(Utilities.path(templateDir, sfn + "xml"));
+    File jsonIg = new File(sfn +"json");
+    File xmlIg = new File(sfn + "xml");
     if (ig != null) {
       antProject.setProperty(target + ".ig.source", sfn);
       antProject.setProperty(target + ".ig.dest", fn);
@@ -199,8 +210,14 @@ public class Template {
         jsonIg.delete();
       if (xmlIg.exists())
         xmlIg.delete();
-      new XmlParser().compose(new FileOutputStream(sfn+"xml"), ig);
-      new JsonParser().compose(new FileOutputStream(sfn+"json"), ig);    
+      if (USE_R5_IG_FORMAT) {
+        new XmlParser().compose(new FileOutputStream(sfn+"xml"), ig);
+        new JsonParser().compose(new FileOutputStream(sfn+"json"), ig);
+      } else {
+        org.hl7.fhir.r4.model.ImplementationGuide ig4 = (org.hl7.fhir.r4.model.ImplementationGuide) VersionConvertorFactory_40_50.convertResource(ig, new BaseAdvisor_40_50(true, true));
+        new org.hl7.fhir.r4.formats.XmlParser().compose(new FileOutputStream(sfn+"xml"), ig4);
+        new org.hl7.fhir.r4.formats.JsonParser().compose(new FileOutputStream(sfn+"json"), ig4);
+      }
     }
     antProject.executeTarget(target);
     if (fileNames!=null) {
@@ -222,17 +239,35 @@ public class Template {
       String newJson = fn+"json";
       switch (modifyIg) {
         case IG_ANY:
-          if (new File(newXml).exists())
-            return (ImplementationGuide) new XmlParser().parse(new FileInputStream(newXml));
-          else if (new File(newJson).exists())
-            return (ImplementationGuide) new JsonParser().parse(new FileInputStream(newJson));
-          else
+          if (new File(newXml).exists()) {
+            if (USE_R5_IG_FORMAT) {
+              return (ImplementationGuide) new XmlParser().parse(new FileInputStream(newXml));
+            } else {
+              return (ImplementationGuide) VersionConvertorFactory_40_50.convertResource(new org.hl7.fhir.r4.formats.XmlParser().parse(new FileInputStream(newXml)));                
+            }
+          } else if (new File(newJson).exists()) {
+            if (USE_R5_IG_FORMAT) {
+              return (ImplementationGuide) new JsonParser().parse(new FileInputStream(newJson));              
+            } else {
+              return (ImplementationGuide) VersionConvertorFactory_40_50.convertResource(new org.hl7.fhir.r4.formats.JsonParser().parse(new FileInputStream(newXml)));                
+            }
+          } else
             throw new FHIRException("onLoad script "+targetOnLoad+" failed - no output file produced");        
         case IG_NO_RESOURCE:
-          if (new File(newXml).exists())
-            loadModifiedIg((ImplementationGuide) new XmlParser().parse(new FileInputStream(newXml)), ig);
-          else if (new File(newJson).exists())
-            loadModifiedIg((ImplementationGuide) new JsonParser().parse(new FileInputStream(newJson)), ig);
+          if (new File(newXml).exists()) {
+            if (USE_R5_IG_FORMAT) {
+              loadModifiedIg((ImplementationGuide) new XmlParser().parse(new FileInputStream(newXml)), ig);
+            } else {
+              loadModifiedIg((ImplementationGuide) VersionConvertorFactory_40_50.convertResource(new org.hl7.fhir.r4.formats.XmlParser().parse(new FileInputStream(newXml))), ig);
+            }
+          }
+          else if (new File(newJson).exists()) {
+            if (USE_R5_IG_FORMAT) {
+              loadModifiedIg((ImplementationGuide) new JsonParser().parse(new FileInputStream(newJson)), ig);
+            } else {
+              loadModifiedIg((ImplementationGuide) VersionConvertorFactory_40_50.convertResource(new org.hl7.fhir.r4.formats.JsonParser().parse(new FileInputStream(newXml))), ig);
+            }
+          }
           return null;
         case IG_NONE:
           return null;
@@ -289,9 +324,7 @@ public class Template {
     if (!(obj.get(name) instanceof JsonPrimitive))
       return null;
     JsonPrimitive p = (JsonPrimitive) obj.get(name);
-    if (!p.isString())
-      return null;
-    return p.getAsString();
+    return p.asString();
   }
 
 
@@ -300,11 +333,11 @@ public class Template {
   }
 
   public boolean getIncludeHeadings() {
-    return !configuration.has("includeHeadings") || configuration.get("includeHeadings").getAsBoolean();
+    return !configuration.has("includeHeadings") || configuration.asBoolean("includeHeadings");
   }
 
   public String getIGArtifactsPage() {
-    return configuration.has("igArtifactsPage") ? configuration.get("igArtifactsPage").getAsString() : null;
+    return configuration.has("igArtifactsPage") ? configuration.asString("igArtifactsPage") : null;
   }
 
   public boolean getDoTransforms() throws Exception {
@@ -312,15 +345,15 @@ public class Template {
   }
 
   public void getExtraTemplates(Map<String, String> extraTemplates) throws Exception {
-    JsonArray templates = configuration.getAsJsonArray("extraTemplates");
+    JsonArray templates = configuration.getJsonArray("extraTemplates");
     if (templates!=null) {
       for (JsonElement template : templates) {
         if (template.isJsonPrimitive())
-          extraTemplates.put(template.getAsString(), template.getAsString());
+          extraTemplates.put(template.asString(), template.asString());
         else {
           if (!((JsonObject)template).has("name") || !((JsonObject)template).has("description"))
             throw new Exception("extraTemplates must be an array of objects with 'name' and 'description' properties");
-          extraTemplates.put(((JsonObject)template).get("name").getAsString(), ((JsonObject)template).get("description").getAsString());
+          extraTemplates.put(((JsonObject)template).asString("name"), ((JsonObject)template).asString("description"));
         }
       }
     }
@@ -386,6 +419,10 @@ public class Template {
 
   public void loadSummaryRows(Set<String> rows) {
     rows.addAll(summaryRows);   
+  }
+
+  public boolean isParameter(String pc) {
+    return templateParams.contains(pc) || (templateParams.isEmpty() && Utilities.existsInList(pc, "releaselabel", "shownav", "excludettl", "jira-code", "fmm-definition", "excludelogbinaryformat"));
   }
 
   

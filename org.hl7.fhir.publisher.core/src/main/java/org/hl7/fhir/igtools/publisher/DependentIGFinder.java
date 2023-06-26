@@ -11,27 +11,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.exceptions.FHIRFormatError;
-import org.hl7.fhir.igtools.publisher.DependentIGFinder.DepInfo;
-import org.hl7.fhir.igtools.publisher.DependentIGFinder.DeplistSorter;
 import org.hl7.fhir.r4.model.CanonicalType;
-import org.hl7.fhir.r4.model.CodeSystem;
 import org.hl7.fhir.r4.model.ValueSet.ConceptSetComponent;
-import org.hl7.fhir.r5.model.CanonicalResource;
 import org.hl7.fhir.utilities.TextFile;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.VersionUtilities;
-import org.hl7.fhir.utilities.json.JsonUtilities;
-import org.hl7.fhir.utilities.json.JsonTrackingParser;
-import org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager;
-import org.hl7.fhir.utilities.npm.NpmPackage;
-import org.hl7.fhir.utilities.npm.PackageClient;
+import org.hl7.fhir.utilities.json.model.JsonObject;
+import org.hl7.fhir.utilities.json.parser.JsonParser;
+import org.hl7.fhir.utilities.npm.*;
+import org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager.FilesystemPackageCacheMode;
+import org.hl7.fhir.utilities.npm.PackageList.PackageListEntry;
+import org.hl7.fhir.utilities.npm.PackageServer;
 import org.hl7.fhir.utilities.npm.ToolsVersion;
 import org.stringtemplate.v4.ST;
 
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 
 public class DependentIGFinder {
 
@@ -117,7 +111,7 @@ public class DependentIGFinder {
   public DependentIGFinder(String id) throws IOException {
     super();
     this.id = id;
-    pcm = new  FilesystemPackageCacheManager(true, ToolsVersion.TOOLS_VERSION);
+    pcm = new  FilesystemPackageCacheManager(FilesystemPackageCacheMode.USER);
     pcm.setSilent(true);
     outcome = "Finding Dependent IGs not done yet";
   }
@@ -144,7 +138,7 @@ public class DependentIGFinder {
   private void analyse() {
     try {
       Set<String> plist = getDependentPackages();
-      JsonObject json = JsonTrackingParser.fetchJson("https://raw.githubusercontent.com/FHIR/ig-registry/master/fhir-ig-list.json");
+      JsonObject json = JsonParser.parseObjectFromUrl("https://raw.githubusercontent.com/FHIR/ig-registry/master/fhir-ig-list.json");
       
       for (String pid : plist) {
         JsonObject guide = getGuide(json, pid);
@@ -165,12 +159,12 @@ public class DependentIGFinder {
   private Set<String> getDependentPackages() {
     Set<String> list = new HashSet<>();
 //    getDependentPackages(list, PackageClient.PRIMARY_SERVER);
-    getDependentPackages(list, PackageClient.SECONDARY_SERVER);
+    getDependentPackages(list, PackageServer.secondaryServer());
     return list;
   }
 
-  private void getDependentPackages(Set<String> list, String url) {
-    PackageClient client = new PackageClient(url);
+  private void getDependentPackages(Set<String> list, PackageServer server) {
+    PackageClient client = new PackageClient(server);
     try {
       client.findDependents(list, id);
     } catch (Exception e) {
@@ -179,8 +173,8 @@ public class DependentIGFinder {
   }
 
   private JsonObject getGuide(JsonObject json, String pid) {
-    for (JsonObject o : JsonUtilities.objects(json, "guides")) {
-      if (pid.equals(JsonUtilities.str(o,  "npm-name"))) {
+    for (JsonObject o : json.getJsonObjects("guides")) {
+      if (pid.equals(o.asString("npm-name"))) {
         return o;
       }
     }
@@ -347,35 +341,33 @@ public class DependentIGFinder {
   }
 
   private void checkIGDependencies(JsonObject guide) { 
-    String pid = JsonUtilities.str(guide, "npm-name");
+    String pid = guide.asString("npm-name");
 //    System.out.println("check "+pid+" " +abc);
     
     // we only check the latest published version, and the CI build
     try {
-      JsonObject pl = JsonTrackingParser.fetchJson(Utilities.pathURL(guide.get("canonical").getAsString(), "package-list.json"));
-      String canonical = JsonUtilities.str(guide, "canonical");
+      PackageList pl = PackageList.fromUrl(Utilities.pathURL(guide.asString("canonical"), "package-list.json"));
+      String canonical = guide.asString("canonical");
       DepInfo dep = new DepInfo(pid, Utilities.path(canonical, "history.html"));
       deplist.add(dep);
-      for (JsonObject list : JsonUtilities.objects(pl, "list")) {
+      for (PackageListEntry e : pl.versions()) {
         boolean ballot = false;
-        String version = JsonUtilities.str(list, "version");
-        if (!"current".equals(version)) {
-          String status = JsonUtilities.str(list, "status");
-          if ("ballot".equals(status)) {
+        String version = e.version();
+          String status = e.status();
+          if ("ballot".equals(status) || "public-comment".equals(status) ) {
             if (!ballot) {
               ballot = true;
-              dep.ballot = checkForDependency(pid, version, JsonUtilities.str(list, "path"));          
+              dep.ballot = checkForDependency(pid, version, e.path());          
             }
           } else {
-            dep.published = checkForDependency(pid, version, JsonUtilities.str(list, "path"));                    
+            dep.published = checkForDependency(pid, version, e.path());                    
             break;
           }
-        }
       }
-      dep.cibuild = checkForDependency(pid, "current", JsonUtilities.str(guide, "ci-build"));
+      dep.cibuild = checkForDependency(pid, "current", guide.asString("ci-build"));
     } catch (Exception e) {
-      errors.add("Unable to process "+JsonUtilities.str(guide, "name")+": " +e.getMessage());
-      if (debug) System.out.println("Dependency Analysis - Unable to process "+JsonUtilities.str(guide, "name")+": " +e.getMessage());
+      errors.add("Unable to process "+guide.asString("name")+": " +e.getMessage());
+      if (debug) System.out.println("Dependency Analysis - Unable to process "+guide.asString("name")+": " +e.getMessage());
     }    
   }
 
@@ -401,7 +393,7 @@ public class DependentIGFinder {
     DepInfoDetails res = new DepInfoDetails(version, path);
     if (VersionUtilities.isR4Ver(npm.fhirVersion()) || VersionUtilities.isR4BVer(npm.fhirVersion())) {
       scanR4IG(npm, res);
-    } else if (VersionUtilities.isR5Ver(npm.fhirVersion())) {
+    } else if (VersionUtilities.isR5Plus(npm.fhirVersion())) {
 //      scanR5IG(npm, res);
     } else if (VersionUtilities.isR3Ver(npm.fhirVersion())) {
 //      scanR3IG(npm, res);

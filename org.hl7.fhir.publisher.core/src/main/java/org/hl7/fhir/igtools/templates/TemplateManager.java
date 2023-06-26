@@ -36,16 +36,15 @@ import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.r5.context.IWorkerContext.ILoggingService;
 import org.hl7.fhir.utilities.TextFile;
 import org.hl7.fhir.utilities.Utilities;
-import org.hl7.fhir.utilities.json.JsonTrackingParser;
+import org.hl7.fhir.utilities.json.model.JsonArray;
+import org.hl7.fhir.utilities.json.model.JsonElement;
+import org.hl7.fhir.utilities.json.model.JsonObject;
+import org.hl7.fhir.utilities.json.model.JsonProperty;
+import org.hl7.fhir.utilities.json.parser.JsonParser;
 import org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager;
 import org.hl7.fhir.utilities.npm.NpmPackage;
 import org.hl7.fhir.utilities.npm.NpmPackage.NpmPackageFolder;
 import org.hl7.fhir.utilities.npm.PackageGenerator.PackageType;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 
 public class TemplateManager {
 
@@ -55,13 +54,11 @@ public class TemplateManager {
   boolean canExecute;
   String templateThatCantExecute;
   String templateReason;
-  String ghUrl;
   List<String> templateList = new ArrayList<>();
 
-  public TemplateManager(FilesystemPackageCacheManager pcm, ILoggingService logger, String ghUrl) {
+  public TemplateManager(FilesystemPackageCacheManager pcm, ILoggingService logger) {
     this.pcm = pcm;
     this.logger = logger;
-    this.ghUrl = ghUrl;
   }
 
   public Template loadTemplate(String template, String rootFolder, String packageId, boolean autoMode) throws FHIRException, IOException {
@@ -96,15 +93,15 @@ public class TemplateManager {
     templateList.add(npm.name()+"#"+npm.version());
     loadedIds.add(npm.name());
     if (npm.getNpm().has("base")) {
-      String baseTemplate = npm.getNpm().get("base").getAsString();
+      String baseTemplate = npm.getNpm().asString("base");
       if (loadedIds.contains(baseTemplate)) {
         loadedIds.add(baseTemplate);
         throw new FHIRException("Template parents recurse: " + String.join("->", loadedIds));
       }
-      if (!npm.getNpm().has("dependencies") || !npm.getNpm().getAsJsonObject("dependencies").has(baseTemplate)) {
+      if (!npm.getNpm().has("dependencies") || !npm.getNpm().getJsonObject("dependencies").has(baseTemplate)) {
         throw new FHIRException("Unable to resolve "+baseTemplate+" because it is not listed in the dependencies");
       }
-      String ver = npm.getNpm().getAsJsonObject("dependencies").get(baseTemplate).getAsString();
+      String ver = npm.getNpm().getJsonObject("dependencies").asString(baseTemplate);
       installTemplate(baseTemplate+"#"+ver, rootFolder, templateDir, scriptIds, loadedIds, level + 1);
     }
     // npm.debugDump("template");
@@ -115,7 +112,7 @@ public class TemplateManager {
     JsonObject config = null;
     if (npm.hasFile(Utilities.path("package", "$root"), "config.json")) {
       try {
-        config = JsonTrackingParser.parseJson(npm.load(Utilities.path("package", "$root"), "config.json"));
+        config = JsonParser.parseObject(npm.load(Utilities.path("package", "$root"), "config.json"));
       } catch (Exception e) {
         TextFile.streamToFile(npm.load(Utilities.path("package", "$root"), "config.json"), Utilities.path("[tmp]", npm.name()+"#"+npm.version()+"$config.json"));
         throw new FHIRException("Error parsing "+npm.name()+"#"+npm.version()+"#"+Utilities.path("package", "$root", "config.json")+": "+e.getMessage(), e);
@@ -126,11 +123,13 @@ public class TemplateManager {
     if (noScripts) {
       for (NpmPackageFolder f : npm.getFolders().values()) {
         for (String n : f.listFiles()) {
-          String s = extension(n);
-          if (!Utilities.existsInList(s, ".html", ".css", ".png", ".gif", ".oet", ".json", ".xml", ".ico", ".jpg", ".md", ".ini", ".eot", ".otf", ".svg", ".ttf", ".woff", ".txt", ".yml", ".gitignore")) {
-            noScripts = false;
-            ext.add(s);
-            break;
+          if (!Utilities.existsInList(n.toLowerCase(), "license", "readme")) {
+            String s = extension(n);
+            if (!Utilities.existsInList(s, ".html", ".css", ".png", ".gif", ".oet", ".json", ".xml", ".ico", ".jpg", ".md", ".ini", ".eot", ".otf", ".svg", ".ttf", ".woff", ".txt", ".yml", ".liquid", ".gitignore")) {
+              noScripts = false;
+              ext.add(s);
+              break;
+            }
           }
         }
       }
@@ -144,30 +143,29 @@ public class TemplateManager {
       for (int i=1;i<configs.size(); i++) {
         applyConfigChanges(config, configs.get(i));
       }
-      Gson gson = new GsonBuilder().setPrettyPrinting().create();
-      String configString = gson.toJson(config);
+      String configString = JsonParser.compose(config, true);
       String configPath = Utilities.path(templateDir, "config.json");
       TextFile.stringToFile(configString, configPath, false);
     }
   }
   
   private void applyConfigChanges(JsonObject baseConfig, JsonObject deltaConfig) throws FHIRException {
-    for (String key : deltaConfig.keySet()) {
-      if (baseConfig.has(key)) {
-        JsonElement baseElement = baseConfig.get(key);
-        JsonElement newElement = deltaConfig.get(key);
+    for (JsonProperty p : deltaConfig.getProperties()) {
+      if (baseConfig.has(p.getName())) {
+        JsonElement baseElement = baseConfig.get(p.getName());
+        JsonElement newElement = deltaConfig.get(p.getName());
         if (baseElement.isJsonArray()!=newElement.isJsonArray() || baseElement.isJsonObject()!=newElement.isJsonObject() || baseElement.isJsonPrimitive()!=newElement.isJsonPrimitive())
-          throw new FHIRException("When overriding template config file, element " + key + " has a different JSON type in the base config file (" + baseElement + ") than it does in the overriding config file (" + newElement + ").");
+          throw new FHIRException("When overriding template config file, element " + p.getName() + " has a different JSON type in the base config file (" + baseElement + ") than it does in the overriding config file (" + newElement + ").");
         if (newElement.isJsonObject()) {
-          applyConfigChanges(baseElement.getAsJsonObject(), deltaConfig.get(key).getAsJsonObject());
+          applyConfigChanges((JsonObject) baseElement, (JsonObject) p.getValue());
         } else if (newElement.isJsonArray()) {
-          baseElement.getAsJsonArray().addAll(newElement.getAsJsonArray());
+          ((JsonArray)baseElement).getItems().addAll(((JsonArray)newElement).getItems());
         } else {
-          baseConfig.remove(key);
-          baseConfig.add(key, deltaConfig.get(key));
+          baseConfig.remove(p.getName());
+          baseConfig.add(p.getName(), deltaConfig.get(p.getName()));
         }
       } else {
-        baseConfig.add(key, deltaConfig.get(key));
+        baseConfig.add(p.getName(), deltaConfig.get(p.getName()));
       }
     }
   }
@@ -216,6 +214,7 @@ public class TemplateManager {
         "hl7.cda.template",
         "hl7.davinci.template",
         "openhie.fhir.template",
+        "who.fhir.template",
         "ihe.fhir.template")) {
       canExecute = false;
       templateThatCantExecute = template;
@@ -251,7 +250,7 @@ public class TemplateManager {
         return pcm.loadPackage(p[0], p[1]);
       }
       File f = new File(template);
-      if (!f.exists()) {
+      if (!f.exists() && !Utilities.isURL(template)) {
         f = new File(Utilities.path(rootFolder, template));
       }
       if (f.exists()) {
@@ -272,7 +271,7 @@ public class TemplateManager {
         InputStream zip = connection.getInputStream();
         return NpmPackage.fromZip(zip, true, url.toString()); 
       }
-      throw new FHIRException("Unable to load template from "+template+" cannot find template. Use a github URL, a local directory, or #[folder] for a contained template");
+      throw new FHIRException("Unable to load template source from "+template+". Use a github URL, a local directory, or #[folder] for a contained template");
     } catch (Exception e) {
       e.printStackTrace();
       throw new FHIRException("Error loading template "+template+": "+e.getMessage(), e);

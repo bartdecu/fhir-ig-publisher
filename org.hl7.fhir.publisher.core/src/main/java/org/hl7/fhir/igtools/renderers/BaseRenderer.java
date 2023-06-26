@@ -1,36 +1,15 @@
 package org.hl7.fhir.igtools.renderers;
 
-/*-
- * #%L
- * org.hl7.fhir.publisher.core
- * %%
- * Copyright (C) 2014 - 2019 Health Level 7
- * %%
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- * #L%
- */
-
-
-import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.publisher.IGKnowledgeProvider;
 import org.hl7.fhir.igtools.publisher.SpecMapManager;
-import org.hl7.fhir.r5.conformance.ProfileUtilities;
+import org.hl7.fhir.r5.conformance.profile.ProfileUtilities;
 import org.hl7.fhir.r5.context.IWorkerContext;
 import org.hl7.fhir.r5.model.CanonicalResource;
+import org.hl7.fhir.r5.model.Resource;
 import org.hl7.fhir.r5.model.CodeSystem;
 import org.hl7.fhir.r5.model.CodeSystem.ConceptDefinitionComponent;
 import org.hl7.fhir.r5.model.PrimitiveType;
@@ -52,7 +31,7 @@ public class BaseRenderer extends TranslatingUtilities implements IMarkdownProce
   protected List<SpecMapManager> specmaps;
   protected Set<String> allTargets;
   protected NpmPackage packge;
-  private MarkDownProcessor markdownEngine;
+  protected MarkDownProcessor markdownEngine;
   protected RenderingContext gen;
 
 
@@ -98,10 +77,10 @@ public class BaseRenderer extends TranslatingUtilities implements IMarkdownProce
 	        String[] paths = parts[0].split("\\.");
 	        StructureDefinition p = new ProfileUtilities(context, null, null).getProfile(null, paths[0]);
 	        if (p != null) {
-	          if (p.getUserData("path") == null)
+	          if (p.getWebPath() == null)
 	            url = paths[0].toLowerCase();
 	          else
-	            url = p.getUserString("path");
+	            url = p.getWebPath();
 	          if (paths.length > 1) {
 	            url = url.replace(".html", "-definitions.html#"+parts[0]);
 	          }
@@ -111,7 +90,7 @@ public class BaseRenderer extends TranslatingUtilities implements IMarkdownProce
 	      }
 	      text = left+"["+linkText+"]("+url+")"+right;
 	    }
-	    // 1. if prefix <> "", then check whether we need to insert the prefix
+	    // 2. if prefix <> "", then check whether we need to insert the prefix
 	    if (!Utilities.noString(prefix)) {
 	      int i = text.length() - 3;
 	      while (i > 0) {
@@ -126,7 +105,7 @@ public class BaseRenderer extends TranslatingUtilities implements IMarkdownProce
 	    }
 	    text = ProfileUtilities.processRelativeUrls(text, "", corePath, context.getResourceNames(), specmaps.get(0).listTargets(), allTargets, false);
 	    // 3. markdown
-	    String s = markdownEngine.process(checkEscape(text), location);
+	    String s = markdownEngine.process(text, location);
 	    return s;
 	  } catch (Throwable e) {
 		  throw new FHIRException("Error processing string: " + text, e);
@@ -139,14 +118,11 @@ public class BaseRenderer extends TranslatingUtilities implements IMarkdownProce
       if (url != null)
         return Utilities.pathURL(map.getBase(), url);
     }      
+    CanonicalResource cr = (CanonicalResource) context.fetchResource(Resource.class, linkText);
+    if (cr != null && cr.hasWebPath()) {
+      return cr.getWebPath();
+    }
     return null;
-  }
-
-  private String checkEscape(String text) {
-    if (text.startsWith("```"))
-      return text.substring(3);
-    else
-      return Utilities.escapeXml(text);
   }
 
   protected String canonicalise(String uri) {
@@ -162,14 +138,14 @@ public class BaseRenderer extends TranslatingUtilities implements IMarkdownProce
   protected String renderCommitteeLink(CanonicalResource cr) {
     String code = ToolingExtensions.readStringExtension(cr, ToolingExtensions.EXT_WORKGROUP);
     CodeSystem cs = context.fetchCodeSystem("http://terminology.hl7.org/CodeSystem/hl7-work-group");
-    if (cs == null || !cs.hasUserData("path"))
+    if (cs == null || !cs.hasWebPath())
       return code;
     else {
       ConceptDefinitionComponent cd = CodeSystemUtilities.findCode(cs.getConcept(), code);
       if (cd == null) {
         return code;        
       } else {
-        return "<a href=\""+cs.getUserString("path")+"#"+cs.getId()+"-"+cd.getCode()+"\">"+cd.getDisplay()+"</a>";
+        return "<a href=\""+cs.getWebPath()+"#"+cs.getId()+"-"+cd.getCode()+"\">"+cd.getDisplay()+"</a>";
       }
     }
   }

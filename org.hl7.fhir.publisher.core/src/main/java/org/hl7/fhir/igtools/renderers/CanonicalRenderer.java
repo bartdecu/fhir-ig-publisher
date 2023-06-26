@@ -14,7 +14,6 @@ import org.hl7.fhir.r5.renderers.DataRenderer;
 import org.hl7.fhir.r5.renderers.utils.RenderingContext;
 import org.hl7.fhir.r5.utils.ToolingExtensions;
 import org.hl7.fhir.utilities.MarkDownProcessor;
-import org.hl7.fhir.utilities.StandardsStatus;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.npm.NpmPackage;
 
@@ -61,9 +60,6 @@ public class CanonicalRenderer extends BaseRenderer {
 
     String name = cr.hasName() ? gt(cr.getNameElement()) : null;
     String title = cr.hasTitle() ? gt(cr.getTitleElement()) : null;
-    if (title == null) {
-      title = ToolingExtensions.readStringExtension(cr, "http://hl7.org/fhir/tools/StructureDefinition/extension-title");
-    }
     if (hasSummaryRow(rows, "name")) {
 
       b.append(" <tr><td>"+translate("cr.summary", "Name")+":</td><td>"+Utilities.escapeXml(name)+"</td></tr>\r\n");
@@ -107,7 +103,7 @@ public class CanonicalRenderer extends BaseRenderer {
   }
 
   protected void genSummaryRowsSpecific(StringBuilder b, Set<String> rows) {
-    // Nothing    
+    // Nothing - override in descendents   
   }
 
   private void genSummaryCore2(StringBuilder b, FetchedResource r, boolean xml, boolean json, boolean ttl, Set<String> rows) {
@@ -178,7 +174,7 @@ public class CanonicalRenderer extends BaseRenderer {
     boolean first = true;
     for (CanonicalResource r : list) {
       if (first) first = false; else b.append(", ");
-      String path = r.getUserString("path");
+      String path = r.getWebPath();
       if (path != null) {
         b.append("<a href=\""+Utilities.escapeXml(path)+"\">"+Utilities.escapeXml(r.present())+"</a>");
       } else {

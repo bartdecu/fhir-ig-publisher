@@ -7,14 +7,17 @@ import java.io.FileOutputStream;
 import org.apache.commons.io.IOUtils;
 import org.hl7.fhir.igtools.publisher.Publisher;
 import org.hl7.fhir.igtools.publisher.Publisher.CacheOption;
-import org.hl7.fhir.utilities.ToolGlobalSettings;
+
 import org.hl7.fhir.utilities.Utilities;
-import org.hl7.fhir.utilities.json.JsonTrackingParser;
+import org.hl7.fhir.utilities.json.model.JsonObject;
+import org.hl7.fhir.utilities.json.parser.JsonParser;
+import org.hl7.fhir.utilities.settings.FhirSettings;
 import org.junit.jupiter.api.Assertions;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
-import com.google.gson.JsonObject;
-
+@EnabledIf("igsPathExists")
 public class AllGuidesTests {
 
 private static final String VER = "1.0.53";
@@ -24,7 +27,6 @@ private static final String VER = "1.0.53";
 //    System.out.println("Publish IG "+path);
 //    Publisher pub = new Publisher();
 //    pub.setConfigFile(path);
-//    pub.setTxServer("http://tx.fhir.org");
 //    pub.setCacheOption(CacheOption.LEAVE);
 //    pub.execute();
 //    System.out.println("=======================================================================================");
@@ -32,45 +34,49 @@ private static final String VER = "1.0.53";
 //  }
 
   private void testIg(String id, String path) throws Exception {
-    if (!new File(ToolGlobalSettings.getTestIgsPath()).exists()) {
+    if (!igsPathExists()) {
       Assertions.assertTrue(true);
       return;
     }
     System.out.println("=======================================================================================");
-    String p = (path == null ? Utilities.path(ToolGlobalSettings.getTestIgsPath(), id) : Utilities.path(ToolGlobalSettings.getTestIgsPath(), id, path));
+    String p = (path == null ? Utilities.path(FhirSettings.getTestIgsPath(), id) : Utilities.path(FhirSettings.getTestIgsPath(), id, path));
     System.out.println("Publish IG "+ p);
     Publisher pub = new Publisher();
     pub.setConfigFile(p);
-    pub.setTxServer("http://tx.fhir.org");
+    pub.setTxServer(FhirSettings.getTxFhirDevelopment());
     pub.setCacheOption(CacheOption.LEAVE);
     pub.execute();
     
     System.out.println("===== Analysis ======================================================================");
     // to make diff programs easy to run
-    IOUtils.copy(new FileInputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), id, "output", "qa.json")), new FileOutputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), "records", id+"-qa-gen.json")));
-    IOUtils.copy(new FileInputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), id, "output", "qa.html")), new FileOutputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), "records", id+"-qa-gen.html")));
-    if (new File(Utilities.path(ToolGlobalSettings.getTestIgsPath(), id, "output", "qa.txt")).exists()) {
-      IOUtils.copy(new FileInputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), id, "output", "qa.txt")), new FileOutputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), "records", id+"-qa-gen.txt")));
+    IOUtils.copy(new FileInputStream(Utilities.path(FhirSettings.getTestIgsPath(), id, "output", "qa.json")), new FileOutputStream(Utilities.path(FhirSettings.getTestIgsPath(), "records", id+"-qa-gen.json")));
+    IOUtils.copy(new FileInputStream(Utilities.path(FhirSettings.getTestIgsPath(), id, "output", "qa.html")), new FileOutputStream(Utilities.path(FhirSettings.getTestIgsPath(), "records", id+"-qa-gen.html")));
+    if (new File(Utilities.path(FhirSettings.getTestIgsPath(), id, "output", "qa.txt")).exists()) {
+      IOUtils.copy(new FileInputStream(Utilities.path(FhirSettings.getTestIgsPath(), id, "output", "qa.txt")), new FileOutputStream(Utilities.path(FhirSettings.getTestIgsPath(), "records", id+"-qa-gen.txt")));
     }
     
-    JsonObject current = JsonTrackingParser.parseJson(new FileInputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), id, "output", "qa.json")));
+    JsonObject current = JsonParser.parseObject(new FileInputStream(Utilities.path(FhirSettings.getTestIgsPath(), id, "output", "qa.json")));
     JsonObject previous = null;
-    if (new File(Utilities.path(ToolGlobalSettings.getTestIgsPath(), "records", id+"-qa.json")).exists()) {
-      previous = JsonTrackingParser.parseJson(new FileInputStream(Utilities.path(ToolGlobalSettings.getTestIgsPath(), "records", id+"-qa.json")));
+    if (new File(Utilities.path(FhirSettings.getTestIgsPath(), "records", id+"-qa.json")).exists()) {
+      previous = JsonParser.parseObject(new FileInputStream(Utilities.path(FhirSettings.getTestIgsPath(), "records", id+"-qa.json")));
     } else {
       previous = new JsonObject();      
     }
-    int cErr = current.has("errs") ? current.get("errs").getAsInt() : 0;
-    int pErr = previous.has("errs") ? previous.get("errs").getAsInt() : 0;
-    int cWarn = current.has("warnings") ? current.get("warnings").getAsInt() : 0;
-    int pWarn = previous.has("warnings") ? previous.get("warnings").getAsInt() : 0;
-    int cHint = current.has("hints") ? current.get("hints").getAsInt() : 0;
-    int pHint = previous.has("hints") ? previous.get("hints").getAsInt() : 0;
+    int cErr = current.hasNumber("errs") ? current.asInteger("errs") : 0;
+    int pErr = previous.hasNumber("errs") ? previous.asInteger("errs") : 0;
+    int cWarn = current.hasNumber("warnings") ? current.asInteger("warnings") : 0;
+    int pWarn = previous.hasNumber("warnings") ? previous.asInteger("warnings") : 0;
+    int cHint = current.hasNumber("hints") ? current.asInteger("hints") : 0;
+    int pHint = previous.hasNumber("hints") ? previous.asInteger("hints") : 0;
     Assertions.assertTrue(cErr <= pErr, "Error count has increased from "+pErr+" to "+cErr);
     Assertions.assertTrue(cWarn <= pWarn, "Warning count has increased from "+pWarn+" to "+cWarn);
     Assertions.assertTrue(cHint <= pHint, "Hint count has increased from "+pHint+" to "+cHint);
     System.out.println("=======================================================================================");
     System.out.println("");
+  }
+
+  private static boolean igsPathExists() {
+    return FhirSettings.getTestIgsPath() != null && new File(FhirSettings.getTestIgsPath()).exists();
   }
 
 //  private String testingPath() {
@@ -115,7 +121,7 @@ private static final String VER = "1.0.53";
 
   @Test
   public void testAUBase() throws Exception {
-    testIg("hl7.fhir.au.base", "ig.json");
+    testIg("hl7.fhir.au.base", null);
   }
 
 
@@ -129,6 +135,10 @@ private static final String VER = "1.0.53";
     testIg("hl7.fhir.uv.howto", null);
   }
 
+  @Test
+  public void testExtensions() throws Exception {
+    testIg("hl7.fhir.uv.extensions", null);
+  }
 
 //
 //  @Test
@@ -174,7 +184,7 @@ private static final String VER = "1.0.53";
 //  }
 //
 //  private void checkIGMods(String path) throws IOException {
-//    JsonObject json = JsonTrackingParser.parseJsonFile(path);
+//    JsonObject json = JsonParser.parseJsonFile(path);
 //    Assert.assertEquals("xxxxx", json.get("publisher").getAsString());  // jjjjj is set in the javascript load script
 //  }
 //
@@ -188,9 +198,21 @@ private static final String VER = "1.0.53";
 //    test(Utilities.path(testingPath(), "src", "test", "resources", "test-igs", "new", "ig-package"));
 //  }
 
-  //@Test
+  @Test
   public void testIPS() throws Exception {
-    testIg("hl7.fhir.uv.ips", "ig.json");
+    testIg("hl7.fhir.uv.ips", null);
   }
 
+  @Test
+  public void testIPA() throws Exception {
+    testIg("hl7.fhir.uv.ipa", null);
+  }
+
+  @Test
+  public void testTools() throws Exception {
+    testIg("hl7.fhir.uv.tools", null);
+  }
+
+  
+  
 }

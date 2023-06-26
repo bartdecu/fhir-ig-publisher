@@ -25,17 +25,15 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Calendar;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Set;
 
 import org.hl7.fhir.igtools.publisher.DependentIGFinder;
@@ -48,14 +46,13 @@ import org.hl7.fhir.igtools.publisher.comparators.IpaComparator;
 import org.hl7.fhir.igtools.publisher.comparators.PreviousVersionComparator;
 import org.hl7.fhir.igtools.publisher.realm.RealmBusinessRules;
 import org.hl7.fhir.r5.context.IWorkerContext;
-import org.hl7.fhir.r5.context.IWorkerContext.PackageDetails;
-import org.hl7.fhir.r5.context.IWorkerContext.PackageVersion;
 import org.hl7.fhir.r5.elementmodel.Element;
 import org.hl7.fhir.r5.formats.XmlParser;
 import org.hl7.fhir.r5.model.Bundle;
 import org.hl7.fhir.r5.model.Bundle.BundleEntryComponent;
 import org.hl7.fhir.r5.model.Constants;
 import org.hl7.fhir.r5.model.OperationOutcome;
+import org.hl7.fhir.r5.model.PackageInformation;
 import org.hl7.fhir.r5.model.StructureDefinition;
 import org.hl7.fhir.r5.utils.FHIRPathEngine;
 import org.hl7.fhir.r5.utils.OperationOutcomeUtilities;
@@ -68,10 +65,8 @@ import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.Source;
 import org.stringtemplate.v4.ST;
-import org.stringtemplate.v4.STErrorListener;
 
 public class ValidationPresenter extends TranslatingUtilities implements Comparator<FetchedFile> {
-
 
   private class ProfileSignpostBuilder {
 
@@ -92,16 +87,15 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
       if (url.startsWith("http://hl7.org/fhir/StructureDefinition/")) {
         return "<a href=\"http://hl7.org/fhir\">fhir</a>.";
       }
-      PackageVersion pck = context.getPackageForUrl(url);
+      PackageInformation pck = context.getPackageForUrl(url);
       if (pck != null) {
         if (pck.getId().equals(packageId)) {
           return "<i>this.</i>";
+        } else if (pck.getWeb() != null) {
+          return "<a href=\""+pck.getWeb()+"\">"+pck.getId()+"</a>.";
+        } else {
+          return pck.getId()+".";
         }
-        PackageDetails det = context.getPackage(pck);
-        if (det != null) {
-          return "<a href=\""+det.getWeb()+"\">"+det.getName()+"</a>.";
-        }
-        return pck.getId()+".";
       }
       return "";
     }
@@ -146,7 +140,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
           StructureDefinition sd = context.fetchResource(StructureDefinition.class, url);
           String l = null;
           if (sd != null) {
-            l = specName+"<a href=\""+sd.getUserString("path")+"\">"+sd.present()+"</a>"+s;
+            l = specName+"<a href=\""+sd.getWebPath()+"\">"+sd.present()+"</a>"+s;
           } else {
             l = "<a href=\""+url+"\">"+url+"</a>"+s;          
           } 
@@ -233,6 +227,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
 
   private static final String INTERNAL_LINK = "internal";
   private static final boolean NO_FILTER = false;
+  private Date ruleDateCutoff = null;
   private String statedVersion;
   private IGKnowledgeProvider provider;
   private IGKnowledgeProvider altProvider;
@@ -244,10 +239,9 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
   private String packageId;
   private String altPackageId;
   private String igVersion;
-  private String ballotCheck;
   private String toolsVersion;
   private String currentToolsVersion;
-  private String versionRulesCheck;
+  private String pubReqCheck;
   private RealmBusinessRules realm;
   private PreviousVersionComparator previousVersionComparator;
   private String csAnalysis;
@@ -265,11 +259,13 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
   private String dependencies;
   private DependentIGFinder dependentIgs;
   private IpaComparator ipaComparator;
+  private List<StructureDefinition> modifierExtensions;
+  private String globalCheck;
   
-  public ValidationPresenter(String statedVersion, String igVersion, IGKnowledgeProvider provider, IGKnowledgeProvider altProvider, String root, String packageId, String altPackageId, String ballotCheck, 
+  public ValidationPresenter(String statedVersion, String igVersion, IGKnowledgeProvider provider, IGKnowledgeProvider altProvider, String root, String packageId, String altPackageId, 
       String toolsVersion, String currentToolsVersion, RealmBusinessRules realm, PreviousVersionComparator previousVersionComparator, IpaComparator ipaComparator,
-      String dependencies, String csAnalysis, String versionRulesCheck, String copyrightYear, IWorkerContext context,
-      Set<String> r5Extensions,
+      String dependencies, String csAnalysis, String pubReqCheck, String globalCheck, String copyrightYear, IWorkerContext context,
+      Set<String> r5Extensions, List<StructureDefinition> modifierExtensions,
       List<FetchedResource> noNarratives, List<FetchedResource> noValidation, boolean noValidate, boolean noGenerate, DependentIGFinder dependentIgs) {
     super();
     this.statedVersion = statedVersion;
@@ -279,7 +275,6 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     this.root = root;
     this.packageId = packageId;
     this.altPackageId = altPackageId;
-    this.ballotCheck = ballotCheck;
     this.realm = realm;
     this.toolsVersion = toolsVersion;
     this.currentToolsVersion = currentToolsVersion;
@@ -288,7 +283,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     this.dependencies = dependencies;
     this.dependentIgs = dependentIgs;
     this.csAnalysis = csAnalysis;
-    this.versionRulesCheck = versionRulesCheck;
+    this.pubReqCheck = pubReqCheck;
     this.copyrightYear = copyrightYear;
     this.context = context;
     this.noNarratives = noNarratives;
@@ -296,6 +291,9 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     this.noValidate = noValidate;
     this.noGenerate = noGenerate;
     this.r5Extensions = r5Extensions;
+    this.modifierExtensions = modifierExtensions;
+    this.globalCheck = globalCheck;
+    ruleDateCutoff = Date.from(LocalDate.now().minusMonths(1).atStartOfDay(ZoneId.systemDefault()).toInstant());
     determineCode();
   }
 
@@ -396,9 +394,42 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     s.close();
 
     genQAText(title, files, path, filteredMessages, linkErrors);
+    genQAESLintCompactText(title, files, path, filteredMessages, linkErrors);
     
     String summary = "Errors: " + err + ", Warnings: " + warn + ", Info: " + info+", Broken Links: "+link;
     return path + "\r\n" + summary;
+  }
+
+  public void genQAESLintCompactText(String title, List<FetchedFile> files, String path, SuppressedMessageInformation filteredMessages, List<ValidationMessage> linkErrors)
+      throws IOException {
+    StringBuilder b = new StringBuilder();
+    files = sorted(files);
+
+    for (FetchedFile f : files) {
+      for (ValidationMessage vm : filterMessages(f.getErrors(), false, filteredMessages)) {
+        String eslintSeverity = vm.getLevel().getDisplay();
+        if (eslintSeverity.equals("Information"))
+          eslintSeverity = "Info";
+
+        if (eslintSeverity.equals("Fatal"))
+          eslintSeverity = "Error";
+
+        int eslintLine = vm.getLine();
+        if (eslintLine < 0)
+          eslintLine = 0;
+
+        int eslintColumn = vm.getCol();
+        if (eslintColumn < 0)
+          eslintColumn = 0;
+
+        b.append(f.getPath() + ": line " + eslintLine + ", col " + eslintColumn + ", " + eslintSeverity + " - " + vm.getMessage() + " (" + vm.getType() + ")" + "\n");
+      }
+    }
+
+    b.append("\n");
+    b.append(genHeaderTxt(title, err, warn, info));
+    
+    TextFile.stringToFile(b.toString(), Utilities.changeFileExt(path, "-eslintcompact.txt"));
   }
 
   public void genQAText(String title, List<FetchedFile> files, String path, SuppressedMessageInformation filteredMessages, List<ValidationMessage> linkErrors)
@@ -510,7 +541,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
 
   private List<String> messageIdNames() {
     I18nConstants obj = new I18nConstants();
-    org.hl7.fhir.igtools.publisher.I18nConstants obj2 = new org.hl7.fhir.igtools.publisher.I18nConstants(); // not that it really matters?
+    org.hl7.fhir.igtools.publisher.PublisherMessageIds obj2 = new org.hl7.fhir.igtools.publisher.PublisherMessageIds(); // not that it really matters?
     List<String> names = new ArrayList<>();
     Field[] interfaceFields=I18nConstants.class.getFields();
     for(Field f : interfaceFields) {
@@ -522,7 +553,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
       } catch (Exception e) {
       }
     }
-    interfaceFields=org.hl7.fhir.igtools.publisher.I18nConstants.class.getFields();
+    interfaceFields=org.hl7.fhir.igtools.publisher.PublisherMessageIds.class.getFields();
     for(Field f : interfaceFields) {
       try {
         if (Modifier.isStatic(f.getModifiers())) {
@@ -567,7 +598,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     for (ValidationMessage message : messages) {
       boolean passesFilter = true;
       if (canSuppressErrors || !message.getLevel().isError()) {
-        if (suppressedMessages.contains(message.getDisplay()) || suppressedMessages.contains(message.getMessage()) || suppressedMessages.contains(message.getHtml()) || suppressedMessages.contains(message.getMessageId()) ) {
+        if (suppressedMessages.contains(message.getDisplay(), message) || suppressedMessages.contains(message.getMessage(), message) || suppressedMessages.contains(message.getHtml(), message) || suppressedMessages.contains(message.getMessageId(), message) ) {
           passesFilter = false;
         } else if (msgs.contains(message.getLocation()+"|"+message.getMessage())) {
           passesFilter = false;
@@ -592,7 +623,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
   private final String headerTemplate = 
       "<!DOCTYPE HTML>\r\n"+
       "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en\" lang=\"en\">\r\n"+
-      "<!-- broken links = errors = $err$, warn = $warn$, info = $info$, $links$ -->\r\n"+
+      "<!-- broken links = $links$, errors = $err$, warn = $warn$, info = $info$-->\r\n"+
       "<head>\r\n"+
       "  <title>$title$ : Validation Results</title>\r\n"+
       "  <link href=\"fhir.css\" rel=\"stylesheet\"/>\r\n"+
@@ -635,13 +666,14 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
       " <tr><td>Publisher Version:</td><td>$versionCheck$</td></tr>\r\n"+
       " <tr><td>Publication Code:</td><td>$igcode$<span style=\"color: maroon; font-weight: bold\"> $igcodeerror$</span>. PackageId = $packageId$, Canonical = $canonical$</td></tr>\r\n"+
       " <tr><td>Realm Check for $realm$:</td><td><span style=\"color: maroon; font-weight: bold\">$igrealmerror$</span>$realmCheck$</td></tr>\r\n"+
-      " <tr><td>Version Check:</td><td>$versionRulesCheck$</td></tr>\r\n"+
+      " <tr><td>Publication Request:</td><td>$pubReqCheck$</td></tr>\r\n"+
       " <tr><td>Supressed Messages:</td><td>$suppressedmsgssummary$</td></tr>\r\n"+
       " <tr><td>Dependency Checks:</td><td>$dependencyCheck$</td></tr>\r\n"+
       " <tr><td>Dependent IGs:</td><td><a href=\"qa-dep.html\">$dependentIgs$</a></td></tr>\r\n"+
-      " <tr><td>Publication Rules:</td><td>Code = $igcode$. $ballotCheck$ $copyrightYearCheck$</td></tr>\r\n"+
+      " <tr><td>Global Profiles:</td><td>$globalCheck$</td></tr>\r\n"+
       " <tr><td>HTA Analysis:</td><td>$csAnalysis$</td></tr>\r\n"+
       " <tr><td>R5 Dependencies:</td><td>$r5usage$</td></tr>\r\n"+
+      " <tr><td>Modifier Extensions:</td><td>$modifiers$</td></tr>\r\n"+
       " <tr><td>Previous Version Comparison:</td><td> $previousVersion$</td></tr>\r\n"+
       " <tr><td>IPA Comparison:</td><td> $ipaComparison$</td></tr>\r\n"+
       "$noNarrative$"+
@@ -758,18 +790,19 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     t.add("links", Integer.toString(links));
     t.add("packageId", packageId);
     t.add("canonical", provider.getCanonical());
-    t.add("ballotCheck", ballotCheck);
     t.add("copyrightYearCheck", checkCopyRightYear());
     t.add("realmCheck", realm.checkHtml());
     t.add("igcode", igcode);
     t.add("igcodeerror", igCodeError);
     t.add("igrealmerror", igRealmError);
-    t.add("versionRulesCheck", versionRulesCheck);
+    t.add("pubReqCheck", pubReqCheck);
     t.add("realm", igrealm == null ? "n/a" : igrealm.toUpperCase());
+    t.add("globalCheck", globalCheck);
     t.add("dependencyCheck", dependencies);
     t.add("dependentIgs", dependentIgs.getCountDesc());
     t.add("csAnalysis", csAnalysis);
     t.add("r5usage", genR5());
+    t.add("modifiers", genModifiers());
     t.add("otherFileName", allIssues ? "Errors Only" : "Full QA Report");
     t.add("otherFilePath", allIssues ? "qa.min.html" : "qa.html");
     t.add("previousVersion", previousVersionComparator.checkHtml());
@@ -795,7 +828,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     return t.render();
   }
 
-  private Object genR5() {
+  private String genR5() {
     if (r5Extensions == null || r5Extensions.isEmpty()) {
       return "<span style=\"color: grey\">(none)</span>";
     } else {
@@ -805,6 +838,20 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
         String s = url.substring(url.lastIndexOf("-")+1);
         s = s.substring(0, s.indexOf("."));
         b.append("<li><a href=\"http://build.fhir.org/"+s.toLowerCase()+".html\">"+Utilities.escapeXml(url)+"</a></li>");
+      }
+      b.append("</ul>");
+      return b.toString();
+    }
+  }
+
+  private String genModifiers() {
+    if (modifierExtensions == null || modifierExtensions.isEmpty()) {
+      return "<span style=\"color: grey\">(none)</span>";
+    } else {
+      StringBuilder b = new StringBuilder();
+      b.append("<ul>");
+      for (StructureDefinition sd : modifierExtensions) {
+        b.append("<li><a href=\""+sd.getWebPath()+"\">"+Utilities.escapeXml(sd.present())+"</a></li>");
       }
       b.append("</ul>");
       return b.toString();
@@ -839,7 +886,6 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     t.add("packageId", packageId);
     t.add("canonical", provider.getCanonical());
     t.add("copyrightYearCheck", checkCopyRightYear());
-    t.add("ballotCheck", ballotCheck);
     t.add("realmCheck", realm.checkText());
     t.add("igcode", igcode);
     t.add("igcodeerror", igCodeError);
@@ -847,7 +893,7 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     t.add("realm", igrealm == null ? "n/a" : igrealm.toUpperCase());
     t.add("dependencyCheck", dependencies);
     t.add("dependentIgs", dependentIgs.getCountDesc());
-    t.add("versionRulesCheck", versionRulesCheck);
+    t.add("pubReqCheck", pubReqCheck);
     t.add("csAnalysis", csAnalysis);
     t.add("previousVersion", previousVersionComparator.checkHtml());
     t.add("ipaComparison", ipaComparator == null ? "n/a" : ipaComparator.checkHtml());
@@ -1097,10 +1143,14 @@ public class ValidationPresenter extends TranslatingUtilities implements Compara
     t.add("halfcolor", halfColorForLevel(vm.getLevel(), vm.isSignpost()));
     t.add("id", "l"+id);
     t.add("mid", vm.getMessageId());
-    t.add("msg", vm.getHtml());
+    t.add("msg", (isNewRule(vm) ? "<img style=\"vertical-align: text-bottom\" src=\"new.png\" height=\"16px\" width=\"36px\" alt=\"New Rule: \"> " : "")+ vm.getHtml());
     t.add("msgdetails", vm.isSlicingHint() ? vm.getSliceHtml() : vm.getHtml());
     t.add("tx", "qa-tx.html#l"+vm.getTxLink());
     return t.render();
+  }
+
+  private boolean isNewRule(ValidationMessage vm) {
+    return vm.getRuleDate() != null && !vm.getRuleDate().before(ruleDateCutoff);
   }
 
   private String stripId(String loc) {

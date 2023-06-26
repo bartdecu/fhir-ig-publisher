@@ -165,7 +165,7 @@ public class IGPack2NpmConvertor {
   }
 
   private void init() throws IOException {
-    pcm = new FilesystemPackageCacheManager(true, ToolsVersion.TOOLS_VERSION);
+    pcm = new FilesystemPackageCacheManager(org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager.FilesystemPackageCacheMode.USER);
     scanner = new Scanner(System. in);
     paths = new ArrayList<String>();
   }
@@ -203,11 +203,12 @@ public class IGPack2NpmConvertor {
         for (ImplementationGuideDefinitionResourceComponent rd : ig.getDefinition().getResource()) {
           ManifestResourceComponent ra = getMatchingResource(rd.getReference().getReference(), ig);
           if (ra != null) {
-            ra.setExample(rd.getExample());
-            if (rd.hasExtension("http://hl7.org/fhir/StructureDefinition/implementationguide-page")) {
-              ra.setRelativePath(rd.getExtensionString("http://hl7.org/fhir/StructureDefinition/implementationguide-page"));
-              rd.removeExtension("http://hl7.org/fhir/StructureDefinition/implementationguide-page");
-            }
+            ra.setIsExample(rd.getIsExample());
+            throw new Error("What is this code doing?");
+//            if (rd.hasExtension(" http://hl7.org/fhir/StructureDefinition/implementationguide-page")) {
+//              ra.setRelativePath(rd.getExtensionString("http://hl7.org/fhir/StructureDefinition/implementationguide-page"));
+//              rd.removeExtension(" http://hl7.org/fhir/StructureDefinition/implementationguide-page");
+//            }
           }
         }
 
@@ -218,7 +219,7 @@ public class IGPack2NpmConvertor {
         NPMPackageGenerator npm = new NPMPackageGenerator(destFile, canonical, url, PackageType.IG, ig, new Date(), false);
         ByteArrayOutputStream bs = new ByteArrayOutputStream();
         new JsonParser().setOutputStyle(OutputStyle.NORMAL).compose(bs, ig);
-        npm.addFile(Category.RESOURCE, "ig-r4.json", bs.toByteArray());
+        npm.addFile(Category.OTHER, "ig-r4.jsonX", bs.toByteArray());
 
         npm.addFile(Category.RESOURCE, "ImplementationGuide-"+ig.getId()+".json", compose(ig, version));
 
@@ -438,11 +439,18 @@ public class IGPack2NpmConvertor {
     return v;
   }
 
-  private Map<String, byte[]> loadZip(InputStream stream) throws IOException {
+  protected Map<String, byte[]> loadZip(InputStream stream) throws IOException {
     Map<String, byte[]> res = new HashMap<String, byte[]>();
     ZipInputStream zip = new ZipInputStream(stream);
     ZipEntry ze;
     while ((ze = zip.getNextEntry()) != null) {
+      final String entryName = ze.getName();
+
+      if (entryName.contains("..")) {
+        throw new IOException("Entry with an illegal name: " + entryName);
+      }
+
+
       int size;
       byte[] buffer = new byte[2048];
 
@@ -454,7 +462,7 @@ public class IGPack2NpmConvertor {
       }
       bos.flush();
       bos.close();
-      res.put(ze.getName(), bytes.toByteArray());
+      res.put(entryName, bytes.toByteArray());
 
       zip.closeEntry();
     }

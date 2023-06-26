@@ -28,9 +28,9 @@ import java.util.List;
 import org.hl7.fhir.r5.elementmodel.Element;
 import org.hl7.fhir.r5.model.ImplementationGuide.ImplementationGuideDefinitionResourceComponent;
 import org.hl7.fhir.r5.model.Resource;
+import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 
-import com.google.gson.JsonObject;
 
 public class FetchedResource {
   private String id;
@@ -44,14 +44,23 @@ public class FetchedResource {
   private boolean validateAsResource;
   private List<String> statedProfiles = new ArrayList<String>();
   private List<String> foundProfiles = new ArrayList<String>();
+  private List<String> testArtifacts = new ArrayList<String>();
   private boolean snapshotted;
   private String exampleUri;
   private HashSet<FetchedResource> statedExamples = new HashSet<FetchedResource>();
   private HashSet<FetchedResource> foundExamples = new HashSet<FetchedResource>();
+  private HashSet<FetchedResource> foundTestPlans = new HashSet<FetchedResource>();
+  private HashSet<FetchedResource> foundTestScripts = new HashSet<FetchedResource>();
   private ImplementationGuideDefinitionResourceComponent resEntry;
   private List<ProvenanceDetails> audits = new ArrayList<>();
   private List<ValidationMessage> errors = new ArrayList<ValidationMessage>();
   private boolean isProvenance = false;
+  private String nameForErrors;
+
+  public FetchedResource(String nameForErrors) {
+    super();
+    this.nameForErrors = nameForErrors;
+  }
 
   public Resource getResource() {
     return resource;
@@ -67,7 +76,9 @@ public class FetchedResource {
   
   public FetchedResource setElement(Element element) {
     this.element = element;
-    type = element.fhirType();
+    if (type == null) {
+      type = element.fhirType();
+    }
     return this;
   }
 
@@ -151,7 +162,7 @@ public class FetchedResource {
   }  
 
   public boolean isExample() {
-    return (this.exampleUri != null) || (resEntry != null && resEntry.hasExample() && (!resEntry.hasExampleBooleanType() && !resEntry.getExampleBooleanType().booleanValue()));
+    return (this.exampleUri != null) || (resEntry != null && resEntry.hasIsExample() && (resEntry.getIsExample()));
   }  
 
   public HashSet<FetchedResource> getFoundExamples() {
@@ -218,6 +229,63 @@ public class FetchedResource {
   public void setPath(String path) {
     this.path = path;
   }
-  
+
+  public void addTestArtifact(String profile) {
+    // Check for duplicate
+    if (!testArtifacts.contains(profile)) {
+      testArtifacts.add(profile);
+    }
+  }
+	  
+  public List<String> getTestArtifacts() {
+    return testArtifacts;
+  }
+
+  public boolean hasTestArtifacts() {
+    return !testArtifacts.isEmpty();
+  }
+
+  public HashSet<FetchedResource> getFoundTestPlans() {
+    return foundTestPlans;
+  }
+
+  public void addFoundTestPlan(FetchedResource r) {
+    // Check for duplicate
+    if (!foundTestPlans.contains(r)) {
+      this.foundTestPlans.add(r);
+    }
+  }
+
+  public boolean hasFoundTestPlans() {
+    return !foundTestPlans.isEmpty();
+  }
+
+  public HashSet<FetchedResource> getFoundTestScripts() {
+    return foundTestScripts;
+  }
+
+  public void addFoundTestScript(FetchedResource r) {
+    // Check for duplicate
+    if (!foundTestScripts.contains(r)) {
+      this.foundTestScripts.add(r);
+    }
+  }
+
+  public boolean hasFoundTestScripts() {
+    return !foundTestScripts.isEmpty();
+  }
+
+  @Override
+  public String toString() {
+    return fhirType()+"/"+getId(); 
+  }
+
+  public String getNameForErrors() {
+    return nameForErrors;
+  }
+
+  public void setNameForErrors(String nameForErrors) {
+    this.nameForErrors = nameForErrors;
+  }
   
 }

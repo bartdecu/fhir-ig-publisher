@@ -103,7 +103,7 @@ public class ValueSetRenderer extends CanonicalRenderer {
       Set<String> vsurls = new HashSet<String>();
       Set<String> pdurls = new HashSet<String>();
       Set<String> qurls = new HashSet<String>();
-      for (CanonicalResource sd : context.allConformanceResources()) {
+      for (CanonicalResource sd : context.fetchResourcesByType(CanonicalResource.class)) {
         if (sd instanceof StructureDefinition)
           sdurls.add(sd.getUrl());
         if (sd instanceof ValueSet)
@@ -123,7 +123,7 @@ public class ValueSetRenderer extends CanonicalRenderer {
                 first = false;
                 b.append("<ul>\r\n");
               }
-              b.append(" <li>"+translate("vs.usage", "Included into ")+"<a href=\""+vc.getUserString("path")+"\">"+Utilities.escapeXml(gt(vc.getNameElement()))+"</a></li>\r\n");
+              b.append(" <li>"+translate("vs.usage", "Included into ")+"<a href=\""+vc.getWebPath()+"\">"+Utilities.escapeXml(gt(vc.getNameElement()))+"</a></li>\r\n");
               break;
             }
           }
@@ -135,23 +135,23 @@ public class ValueSetRenderer extends CanonicalRenderer {
                 first = false;
                 b.append("<ul>\r\n");
               }
-              b.append(" <li>"+translate("vs.usage", "Excluded from ")+"<a href=\""+vc.getUserString("path")+"\">"+Utilities.escapeXml(gt(vc.getNameElement()))+"</a></li>\r\n");
+              b.append(" <li>"+translate("vs.usage", "Excluded from ")+"<a href=\""+vc.getWebPath()+"\">"+Utilities.escapeXml(gt(vc.getNameElement()))+"</a></li>\r\n");
               break;
             }
           }
         }
       }
       for (String url : sorted(sdurls)) {
-        StructureDefinition sd = context.fetchResource(StructureDefinition.class, url);
+        StructureDefinition sd = context.fetchResourceRaw(StructureDefinition.class, url);
         if (sd != null) {
-          for (ElementDefinition ed : sd.getSnapshot().getElement()) {
+          for (ElementDefinition ed : sd.getDifferential().getElement()) {
             if (ed.hasBinding() && ed.getBinding().hasValueSet()) {
               if ((ed.getBinding().hasValueSet() && ed.getBinding().getValueSet().equals(vs.getUrl()))) {
                 if (first) {
                   first = false;
                   b.append("<ul>\r\n");
                 }
-                String path = sd.getUserString("path");
+                String path = sd.getWebPath();
                 if (path == null) {
                   System.out.println("No path for "+sd.getUrl());
                 } else {
@@ -172,7 +172,7 @@ public class ValueSetRenderer extends CanonicalRenderer {
               first = false;
               b.append("<ul>\r\n");
             }
-            String path = q.getUserString("path");
+            String path = q.getWebPath();
             if (path == null) {
               System.out.println("No path for "+q.getUrl());
             } else {
@@ -190,7 +190,7 @@ public class ValueSetRenderer extends CanonicalRenderer {
             first = false;
             b.append("<ul>\r\n");
           }
-          b.append(" <li>Used as a trigger criteria in <a href=\""+pd.getUserString("path")+"\">"+Utilities.escapeXml(pd.present())+"</a></li>\r\n");
+          b.append(" <li>Used as a trigger criteria in <a href=\""+pd.getWebPath()+"\">"+Utilities.escapeXml(pd.present())+"</a></li>\r\n");
         }
       }
     }

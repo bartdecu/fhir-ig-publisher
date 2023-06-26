@@ -32,7 +32,8 @@ import java.util.Set;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.publisher.FetchedFile;
-import org.hl7.fhir.r5.conformance.ProfileUtilities;
+import org.hl7.fhir.r5.conformance.profile.ProfileUtilities;
+import org.hl7.fhir.r5.context.ContextUtilities;
 import org.hl7.fhir.r5.context.SimpleWorkerContext;
 import org.hl7.fhir.r5.formats.JsonParser;
 import org.hl7.fhir.r5.formats.XmlParser;
@@ -44,7 +45,7 @@ import org.hl7.fhir.r5.model.Bundle.BundleType;
 import org.hl7.fhir.r5.model.CanonicalResource;
 import org.hl7.fhir.r5.model.CanonicalType;
 import org.hl7.fhir.r5.model.CodeSystem;
-import org.hl7.fhir.r5.model.CodeSystem.CodeSystemContentMode;
+import org.hl7.fhir.r5.model.Enumerations.CodeSystemContentMode;
 import org.hl7.fhir.r5.model.CodeSystem.ConceptDefinitionComponent;
 import org.hl7.fhir.r5.model.CodeType;
 import org.hl7.fhir.r5.model.CodeableConcept;
@@ -67,6 +68,7 @@ import org.hl7.fhir.r5.model.Enumerations.BindingStrength;
 import org.hl7.fhir.r5.model.Enumerations.PublicationStatus;
 import org.hl7.fhir.r5.model.Enumerations.QuantityComparator;
 import org.hl7.fhir.r5.model.Enumerations.SearchParamType;
+import org.hl7.fhir.r5.model.Enumerations.VersionIndependentResourceTypesAll;
 import org.hl7.fhir.r5.model.Extension;
 import org.hl7.fhir.r5.model.Factory;
 import org.hl7.fhir.r5.model.IdType;
@@ -125,13 +127,11 @@ public class IgSpreadsheetParser {
   private Bundle bundle;
   private Map<String, String> valuesetsToLoad;
   private Set<String> knownValueSetIds;
-  private boolean first;
 
-  public IgSpreadsheetParser(SimpleWorkerContext context, Calendar genDate, String base, Map<String, String> valuesetsToLoad, boolean first, Map<String, MappingSpace> mappings, Set<String> knownValueSetIds) throws Exception {
+  public IgSpreadsheetParser(SimpleWorkerContext context, Calendar genDate, String base, Map<String, String> valuesetsToLoad, Map<String, MappingSpace> mappings, Set<String> knownValueSetIds) throws Exception {
     this.context = context;
     this.genDate = genDate;
     this.base = base;
-    this.first = first;
     this.valuesetsToLoad = valuesetsToLoad;
     this.knownValueSetIds = knownValueSetIds;
     valuesetsToLoad.clear();
@@ -301,7 +301,7 @@ public class IgSpreadsheetParser {
         sd.setBaseDefinition(sd.getDifferential().getElementFirstRep().getType().get(0).getProfile().get(0).getValue());
       else
         sd.setBaseDefinition("http://hl7.org/fhir/StructureDefinition/"+sd.getType());
-      if (!context.getResourceNames().contains(sd.getType()) && !context.getTypeNames().contains(sd.getType()))
+      if (!context.getResourceNames().contains(sd.getType()) && !new ContextUtilities(context).getTypeNames().contains(sd.getType()))
         throw new Exception("Unknown Resource "+sd.getType());
     }
     sd.getDifferential().getElementFirstRep().getType().clear();
@@ -350,14 +350,14 @@ public class IgSpreadsheetParser {
         else {
           ElementDefinition ed = findContext(sd, inv.getUserString("context"), "Profile "+sd.getId()+" Invariant "+inv.getId()+" Context");
           ed.getConstraint().add(inv);
-          if (Utilities.noString(inv.getXpath())) {
-            throw new Exception("Profile "+sd.getId()+" Invariant "+inv.getId()+" ("+inv.getHuman()+") has no XPath statement");
-          }
+//          if (Utilities.noString(inv.getXpath())) {
+//            throw new Exception("Profile "+sd.getId()+" Invariant "+inv.getId()+" ("+inv.getHuman()+") has no XPath statement");
+//          }
           if (Utilities.noString(inv.getExpression())) {
             throw new Exception("Profile "+sd.getId()+" Invariant "+inv.getId()+" ("+inv.getHuman()+") has no Expression statement");
           }
-          else if (inv.getXpath().contains("\""))
-            throw new Exception("Profile "+sd.getId()+" Invariant "+inv.getId()+" ("+inv.getHuman()+") contains a \" character: "+inv.getXpath());
+//          else if (inv.getXpath().contains("\""))
+//            throw new Exception("Profile "+sd.getId()+" Invariant "+inv.getId()+" ("+inv.getHuman()+") contains a \" character: "+inv.getXpath());
         }
       }
     }
@@ -409,8 +409,7 @@ public class IgSpreadsheetParser {
             throw new Exception("Search Param "+sd.getId()+"-"+n+" has no type "+ getLocation(row));
           sp.setType(readSearchType(sheet.getColumn(row, "Type"), row));
           sp.setDescription(sheet.getColumn(row, "Description"));
-          sp.setXpathUsage(readSearchXPathUsage(sheet.getColumn(row, "Expression Usage"), row));
-          sp.setXpath(sheet.getColumn(row, "XPath"));
+          sp.setProcessingMode(readSearchProcessingMode(sheet.getColumn(row, "Expression Usage"), row));
           sp.setExpression(sheet.getColumn(row, "Expression"));
           if (!sp.hasExpression())
             sp.setExpression(sheet.getColumn(row, "Path"));
@@ -685,7 +684,7 @@ public class IgSpreadsheetParser {
           inv.getSeverityElement().setValueAsString(sev);
         inv.setHuman(sheet.getColumn(row, "English"));
         inv.setExpression(sheet.getColumn(row, "Expression"));
-        inv.setXpath(sheet.getColumn(row, "XPath"));
+//        inv.setXpath(sheet.getColumn(row, "XPath"));
         if (s.equals("") || result.containsKey(s))
           throw new Exception("duplicate or missing invariant id "+ getLocation(row));
         inv.setUserData("context", sheet.getColumn(row, "Context"));
@@ -1387,12 +1386,11 @@ public class IgSpreadsheetParser {
             throw new Exception("Search Param "+sd.getName()+"/"+n+" has no type "+ getLocation(row));
           sp.setType(readSearchType(sheet.getColumn(row, "Type"), row));
           sp.setDescription(sheet.getColumn(row, "Description"));
-          sp.setXpathUsage(readSearchXPathUsage(sheet.getColumn(row, "Expression Usage"), row));
-          sp.setXpath(sheet.getColumn(row, "XPath"));
+          sp.setProcessingMode(readSearchProcessingMode(sheet.getColumn(row, "Expression Usage"), row));
           sp.setExpression(sheet.getColumn(row, "Expression"));
           if (!sp.hasDescription())
             throw new Exception("Search Param "+sd.getId()+"/"+n+" has no description "+ getLocation(row));
-          if (!sp.hasXpathUsage())
+          if (!sp.hasProcessingMode())
             throw new Exception("Search Param "+sd.getId()+"/"+n+" has no expression usage "+ getLocation(row));
           FHIRPathEngine engine = new FHIRPathEngine(context);
           engine.check(null, sd.getType(), sd.getType(), sp.getExpression());
@@ -1424,17 +1422,17 @@ public class IgSpreadsheetParser {
     throw new Exception("Unknown Search Type '" + s + "': " + getLocation(row));
   }
 
-  private SearchParameter.XPathUsageType readSearchXPathUsage(String s, int row) throws Exception {
+  private SearchParameter.SearchProcessingModeType readSearchProcessingMode(String s, int row) throws Exception {
     if (Utilities.noString(s))
-      return SearchParameter.XPathUsageType.NORMAL;
+      return SearchParameter.SearchProcessingModeType.NORMAL;
     if ("normal".equals(s))
-      return SearchParameter.XPathUsageType.NORMAL;
+      return SearchParameter.SearchProcessingModeType.NORMAL;
     if ("nearby".equals(s))
-      return SearchParameter.XPathUsageType.NEARBY;
+      return SearchParameter.SearchProcessingModeType.OTHER;
     if ("distance".equals(s))
-      return SearchParameter.XPathUsageType.DISTANCE;
+      return SearchParameter.SearchProcessingModeType.OTHER;
     if ("phonetic".equals(s))
-      return SearchParameter.XPathUsageType.PHONETIC;
+      return SearchParameter.SearchProcessingModeType.PHONETIC;
     throw new Exception("Unknown Search Path Usage '" + s + "' at " + getLocation(row));
   }
 
@@ -1480,7 +1478,7 @@ public class IgSpreadsheetParser {
             op.setVersion(Constants.VERSION);
             String s = sheet.getColumn(row, "Type");
             if (!Utilities.noString(s)) {
-              op.addResource(s);
+              op.addResource(VersionIndependentResourceTypesAll.fromCode(s));
               op.setType(true);
             }
             s = sheet.getColumn(row, "Title");
@@ -1524,7 +1522,7 @@ public class IgSpreadsheetParser {
             p.setDocumentation(doco);
             p.setMin(Integer.parseInt(min));
             p.setMax(max);
-            p.setType(Enumerations.FHIRAllTypes.fromCode(type));
+            p.setType(Enumerations.FHIRTypes.fromCode(type));
             p.getSearchTypeElement().setValueAsString(sheet.getColumn(row, "Search Type"));
             p.addTargetProfile(profile);
             String bs = sheet.getColumn(row, "Binding");

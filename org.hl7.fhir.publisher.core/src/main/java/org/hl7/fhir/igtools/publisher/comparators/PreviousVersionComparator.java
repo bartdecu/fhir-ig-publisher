@@ -15,14 +15,12 @@ import org.hl7.fhir.convertors.factory.VersionConvertorFactory_40_50;
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.publisher.IGKnowledgeProvider;
 import org.hl7.fhir.igtools.publisher.PastProcessHackerUtilities;
-import org.hl7.fhir.igtools.publisher.PublisherLoader;
 import org.hl7.fhir.igtools.publisher.SpecMapManager;
-import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.igtools.publisher.loaders.PublisherLoader;
 import org.hl7.fhir.r5.comparison.ComparisonRenderer;
 import org.hl7.fhir.r5.comparison.ComparisonSession;
-import org.hl7.fhir.r5.conformance.ProfileUtilities.ProfileKnowledgeProvider;
+import org.hl7.fhir.r5.conformance.profile.ProfileKnowledgeProvider;
 import org.hl7.fhir.r5.context.IWorkerContext.ILoggingService;
-import org.hl7.fhir.r5.context.IWorkerContext;
 import org.hl7.fhir.r5.context.SimpleWorkerContext;
 import org.hl7.fhir.r5.model.CanonicalResource;
 import org.hl7.fhir.r5.model.ImplementationGuide;
@@ -30,17 +28,16 @@ import org.hl7.fhir.r5.model.Resource;
 import org.hl7.fhir.utilities.IniFile;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.VersionUtilities;
-import org.hl7.fhir.utilities.json.JsonUtilities;
-import org.hl7.fhir.utilities.json.JsonTrackingParser;
+import org.hl7.fhir.utilities.json.model.JsonArray;
+import org.hl7.fhir.utilities.json.model.JsonObject;
+import org.hl7.fhir.utilities.json.parser.JsonParser;
 import org.hl7.fhir.utilities.npm.BasePackageCacheManager;
 import org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager;
 import org.hl7.fhir.utilities.npm.NpmPackage;
+import org.hl7.fhir.utilities.npm.PackageList;
+import org.hl7.fhir.utilities.npm.PackageList.PackageListEntry;
 import org.hl7.fhir.utilities.npm.ToolsVersion;
-import org.hl7.fhir.utilities.validation.ValidationMessage;
 
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
 
 public class PreviousVersionComparator {
 
@@ -94,24 +91,30 @@ public class PreviousVersionComparator {
   private List<CanonicalResource> resources;
   private String lastName;
   private String lastUrl;
+  private String businessVersion;
   
-  public PreviousVersionComparator(SimpleWorkerContext context, String version, String rootDir, String dstDir, String canonical, ProfileKnowledgeProvider pkp, ILoggingService logger, List<String> versions) {
+  public PreviousVersionComparator(SimpleWorkerContext context, String version, String businessVersion, String rootDir, String dstDir, String canonical, ProfileKnowledgeProvider pkp, ILoggingService logger, List<String> versions) {
     super();
         
     this.context = context;
     this.version = version;
+    this.businessVersion = businessVersion;
     this.dstDir = dstDir;
     this.newpkp = pkp;
     this.logger = logger;
     try {
-      processVersions(canonical, versions, rootDir);
+      if (businessVersion == null) {
+         errMsg = "No Version Information Provided";
+      } else {
+        processVersions(canonical, versions, rootDir);
+      }
     } catch (Exception e) {
       errMsg = "Unable to find version history at "+canonical+" ("+e.getMessage()+")";
     }
   }
 
   private void processVersions(String canonical, List<String> versions, String rootDir) throws IOException {
-    JsonArray publishedVersions = null;
+    List<PackageListEntry> publishedVersions = null;
     for (String v : versions) {
       if (publishedVersions == null) {
         publishedVersions = fetchVersionHistory(canonical);
@@ -119,34 +122,29 @@ public class PreviousVersionComparator {
       if (Utilities.existsInList(v, "{last}", "{current}")) {
         String last = null;
         String major = null;
-        for (JsonElement e : publishedVersions) {
-          if (e instanceof JsonObject) {
-            JsonObject o = e.getAsJsonObject();
-            if (!"ci-build".equals(JsonUtilities.str(o, "status"))) {
-              if (last == null) {
-                last = JsonUtilities.str(o, "version");
-                lastUrl = JsonUtilities.str(o, "path");
-                lastName = JsonUtilities.str(o, "version");
-              }
-              if (o.has("current") && o.get("current").getAsBoolean()) {
-                major = JsonUtilities.str(o, "version");
-                lastUrl = JsonUtilities.str(o, "path");
-                lastName = JsonUtilities.str(o, "sequence");                
-              }
-            }
+        for (PackageListEntry o : publishedVersions) {
+          if (last == null) {
+            last = o.version();
+            lastUrl = o.path();
+            lastName = o.version();
+          }
+          if (o.current()) {
+            major = o.version();
+            lastUrl = o.path();
+            lastName = o.sequence();                
           }
         }
         if ("{last}".equals(v)) {
           if(last == null) {
             throw new FHIRException("no {last} version found in package-list.json");
-          } else {
+          } else if (!last.equals(businessVersion)) {
             versionList.add(new VersionInstance(last, makeIni(rootDir, last)));
           }
         } 
         if ("{current}".equals(v)) {
           if(last == null) {
             throw new FHIRException("no {current} version found in package-list.json");
-          } else {
+          } else if (!last.equals(businessVersion)) {
             versionList.add(new VersionInstance(major, makeIni(rootDir, major)));
           }
         } 
@@ -165,24 +163,19 @@ public class PreviousVersionComparator {
     }
   }
 
-  private JsonArray fetchVersionHistory(String canonical) { 
+  private List<PackageListEntry> fetchVersionHistory(String canonical) { 
     try {
       canonical = PastProcessHackerUtilities.actualUrl(canonical); // hack for old publishing process problems 
       String ppl = Utilities.pathURL(canonical, "package-list.json");
       logger.logMessage("Fetch "+ppl+" for version check");
-      JsonObject pl = JsonTrackingParser.fetchJson(ppl);
-      if (!canonical.equals(JsonUtilities.str(pl, "canonical"))) {
+      PackageList pl = PackageList.fromUrl(ppl);
+      if (!canonical.equals(pl.canonical())) {
         throw new FHIRException("Mismatch canonical URL");
-      } else if (!pl.has("package-id")) {
+      } else if (!pl.hasPid()) {
         throw new FHIRException("Package ID not specified in package-list.json");        
       } else {
-        pid = JsonUtilities.str(pl, "package-id");
-        JsonArray arr = pl.getAsJsonArray("list");
-        if (arr == null) {
-          throw new FHIRException("Package-list has no history");
-        } else {
-          return arr;
-        }
+        pid = pl.pid();
+        return pl.versions();
       }
     } catch (Exception e) {
       throw new FHIRException("Problem #1 with package-list.json at "+canonical+": "+e.getMessage(), e);
@@ -191,32 +184,33 @@ public class PreviousVersionComparator {
 
 
   public void startChecks(ImplementationGuide ig) {
-    if (errMsg == null && pid != null) {
+    if (errMsg == null && pid != null && businessVersion != null) {
       resources = new ArrayList<>();
       for (VersionInstance vi : versionList) {
         String filename = "";
         try {
           vi.resources = new ArrayList<>();
-          BasePackageCacheManager pcm = new FilesystemPackageCacheManager(true, ToolsVersion.TOOLS_VERSION);
+          BasePackageCacheManager pcm = new FilesystemPackageCacheManager(org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager.FilesystemPackageCacheMode.USER);
           NpmPackage current = pcm.loadPackage(pid, vi.version);
           for (String id : current.listResources("StructureDefinition", "ValueSet", "CodeSystem")) {
             filename = id;
             CanonicalResource curr = (CanonicalResource) loadResourceFromPackage(current, id, current.fhirVersion());
-            curr.setUserData("path", Utilities.pathURL(current.getWebLocation(), curr.fhirType()+"-"+curr.getId()+".html")); // to do - actually refactor to use the correct algorithm
             if (curr != null) {
+              curr.setWebPath(Utilities.pathURL(current.getWebLocation(), curr.fhirType()+"-"+curr.getId()+".html")); // to do - actually refactor to use the correct algorithm
               vi.resources.add(curr);
             }
           }
           NpmPackage core = pcm.loadPackage(VersionUtilities.packageForVersion(current.fhirVersion()), VersionUtilities.getCurrentVersion(current.fhirVersion()));
-          vi.context = new SimpleWorkerContext.SimpleWorkerContextBuilder().withTerminologyCachePath(Utilities.path(context.getTxCache().getFolder(), vi.version)).fromPackage(core, new PublisherLoader(core, SpecMapManager.fromPackage(core), core.getWebLocation(), null).makeLoader());
+          vi.context = new SimpleWorkerContext.SimpleWorkerContextBuilder().withTerminologyCachePath(Utilities.path(context.getTxCache().getFolder(), vi.version)).fromPackage(core, new PublisherLoader(core, SpecMapManager.fromPackage(core), core.getWebLocation(), null).makeLoader(), true);
           //vi.context.initTS();
           vi.context.connectToTSServer(context.getTxClient(), null);
+          vi.context.setAllowLoadingDuplicates(true);
           vi.context.setExpansionProfile(context.getExpansionParameters());
           vi.context.setUcumService(context.getUcumService());
           vi.context.setLocale(context.getLocale());
           vi.context.setLogger(context.getLogger());
           vi.context.loadFromPackageAndDependencies(current, new PublisherLoader(current, SpecMapManager.fromPackage(current), current.getWebLocation(), null).makeLoader(), pcm);
-          vi.pkp = new IGKnowledgeProvider(vi.context, current.getWebLocation(), current.canonical(), null, null, false, null, null);
+          vi.pkp = new IGKnowledgeProvider(vi.context, current.getWebLocation(), current.canonical(), null, null, false, null, null, null);
         } catch (Exception e) {
           vi.errMsg = "Unable to find load package "+pid+"#"+vi.version+" ("+e.getMessage()+" on file "+filename+")";
           e.printStackTrace();
@@ -231,7 +225,7 @@ public class PreviousVersionComparator {
       return VersionConvertorFactory_30_50.convertResource(new org.hl7.fhir.dstu3.formats.JsonParser().parse(s), new BaseAdvisor_30_50(false));
     } else if (VersionUtilities.isR4Ver(version)) {
       return VersionConvertorFactory_40_50.convertResource(new org.hl7.fhir.r4.formats.JsonParser().parse(s));
-    } else if (VersionUtilities.isR5Ver(version)) {
+    } else if (VersionUtilities.isR5Plus(version)) {
       return new org.hl7.fhir.r5.formats.JsonParser().parse(s);
     } else {
       return null;
@@ -239,8 +233,9 @@ public class PreviousVersionComparator {
   }
 
   public void finishChecks() throws IOException {
-    if (errMsg == null && pid != null) {
+    if (errMsg == null && pid != null && businessVersion != null) {
       for (VersionInstance vi : versionList) {
+        comparisons.clear();
         Set<String> set = new HashSet<>();
         for (CanonicalResource rl : vi.resources) {
           comparisons.add(new ProfilePair(rl, findByUrl(rl.getUrl(), resources, vi.ini)));
@@ -262,11 +257,11 @@ public class PreviousVersionComparator {
           }
           Utilities.createDirectory(Utilities.path(dstDir, "comparison-v"+vi.version));
           ComparisonRenderer cr = new ComparisonRenderer(vi.context, context, Utilities.path(dstDir, "comparison-v"+vi.version), session);
-          cr.getTemplates().put("CodeSystem", new String(context.getBinaries().get("template-comparison-CodeSystem.html")));
-          cr.getTemplates().put("ValueSet", new String(context.getBinaries().get("template-comparison-ValueSet.html")));
-          cr.getTemplates().put("Profile", new String(context.getBinaries().get("template-comparison-Profile.html")));
-          cr.getTemplates().put("Index", new String(context.getBinaries().get("template-comparison-index.html")));
-          cr.getTemplates().put("CapabilityStatement", new String(context.getBinaries().get("template-comparison-CapabilityStatement.html")));
+          cr.getTemplates().put("CodeSystem", new String(context.getBinaryForKey("template-comparison-CodeSystem.html")));
+          cr.getTemplates().put("ValueSet", new String(context.getBinaryForKey("template-comparison-ValueSet.html")));
+          cr.getTemplates().put("Profile", new String(context.getBinaryForKey("template-comparison-Profile.html")));
+          cr.getTemplates().put("Index", new String(context.getBinaryForKey("template-comparison-index.html")));
+          cr.getTemplates().put("CapabilityStatement", new String(context.getBinaryForKey("template-comparison-CapabilityStatement.html")));
           cr.render("Version "+vi.version, "Current Build");
         } catch (Throwable e) {
           errMsg = "Current Version Comparison failed: "+e.getMessage();

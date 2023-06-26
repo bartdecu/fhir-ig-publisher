@@ -33,22 +33,28 @@ import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.r5.context.IWorkerContext;
 import org.hl7.fhir.r5.context.IWorkerContext.ILoggingService;
 import org.hl7.fhir.r5.context.IWorkerContext.ILoggingService.LogCategory;
+import org.hl7.fhir.r5.elementmodel.FmlParser;
+import org.hl7.fhir.r5.elementmodel.ParserBase.NamedElement;
+import org.hl7.fhir.r5.elementmodel.ParserBase.ValidationPolicy;
 import org.hl7.fhir.r5.formats.FormatUtilities;
 import org.hl7.fhir.r5.model.CanonicalType;
 import org.hl7.fhir.r5.model.DataType;
 import org.hl7.fhir.r5.model.Reference;
 import org.hl7.fhir.r5.model.StructureDefinition;
 import org.hl7.fhir.r5.model.UriType;
+import org.hl7.fhir.r5.utils.structuremap.StructureMapUtilities;
 import org.hl7.fhir.utilities.TextFile;
 import org.hl7.fhir.utilities.Utilities;
 
 public class SimpleFetcher implements IFetchFile {
 
-  private static final String[] EXTENSIONS = new String[] {".xml", ".json", ".map", ".phinvads"};
+  private static final String[] EXTENSIONS = new String[] {".xml", ".json", ".map", ".fml", ".phinvads"};
   private IGKnowledgeProvider pkp;
   private List<String> resourceDirs;
   private ILoggingService log;
   private String rootDir;
+  private FmlParser fp;
+
   
   public SimpleFetcher(ILoggingService log) {
     this.log = log;
@@ -71,6 +77,7 @@ public class SimpleFetcher implements IFetchFile {
   @Override
   public void setRootDir(String rootDir) {
     this.rootDir = rootDir;
+    FetchedFile.setRoot(rootDir);
   }
 
   @Override
@@ -158,7 +165,7 @@ public class SimpleFetcher implements IFetchFile {
     throw new Exception("Unable to find resource file "+name);
   }
   
-  static String fileTitle(String path) {
+  static public String fileTitle(String path) {
     if (path.contains(".")) {
       String ext = path.substring(path.lastIndexOf(".")+1);
       if (Utilities.isInteger(ext)) {
@@ -190,8 +197,13 @@ public class SimpleFetcher implements IFetchFile {
         throw new Exception("Bad Source Reference '"+s+"' - should have the format [Type]/[id]");
       String type = s.substring(0,  s.indexOf("/"));
       String id = s.substring(s.indexOf("/")+1); 
-      if (!pkp.getContext().hasResource(StructureDefinition.class , "http://hl7.org/fhir/StructureDefinition/"+type) && !(pkp.getContext().hasResource(StructureDefinition.class , "http://hl7.org/fhir/StructureDefinition/Conformance") && type.equals("CapabilityStatement")))
-        throw new Exception("Bad Resource Identity - should have the format [Type]/[id] where Type is a valid resource type:" + s);
+      
+      if (!pkp.getContext().hasResource(StructureDefinition.class, "http://hl7.org/fhir/StructureDefinition/"+type) &&
+          // first special case: Conformance/Capability
+          (!(pkp.getContext().hasResource(StructureDefinition.class , "http://hl7.org/fhir/StructureDefinition/Conformance") && 
+              type.equals("CapabilityStatement"))) 
+          )
+        throw new Exception("Bad Resource Identity - should have the format [Type]/[id] where Type is a valid resource type: " + s);
       if (!id.matches(FormatUtilities.ID_REGEX))
         throw new Exception("Bad Source Reference '"+s+"' - should have the format [Type]/[id] where id is a valid FHIR id type");
       String fn = pkp.getSourceFor(type+"/"+id);
@@ -307,36 +319,39 @@ public class SimpleFetcher implements IFetchFile {
       if (file.exists()) {
         for (File f : file.listFiles()) {
           if (!f.isDirectory()) {
+//            System.out.println("scanning: "+f.getAbsolutePath());
             String fn = f.getCanonicalPath();
             String ext = Utilities.getFileExtension(fn);
             if (!Utilities.existsInList(ext, "md", "txt") && !fn.endsWith(".gitignore") && !fn.contains("-spreadsheet") && !isIgnoredFile(f.getName())) {
               boolean ok = false;
-              if (!Utilities.existsInList(ext, "json", "ttl", "html", "txt"))
+              if (!Utilities.existsInList(ext, fixedFileTypes()))
                 try {
                   org.hl7.fhir.r5.elementmodel.Element e = new org.hl7.fhir.r5.elementmodel.XmlParser(context).parseSingle(new FileInputStream(f));
                   addFile(res, f, e, "application/fhir+xml");
                   count++;
                   ok = true;
                 } catch (Exception e) {
-                  if (!f.getName().startsWith("Binary-")) { // we don't notify here because Binary is special. 
+                  if (!f.getName().startsWith("Binary-") && !f.getName().startsWith("binary-") ) { // we don't notify here because Binary is special. 
                     log.logMessage(e.getMessage() +" loading "+f);
-                    e.printStackTrace();
+//                    e.printStackTrace();
                   }
                 }
-              if (!ok && !Utilities.existsInList(ext, "xml", "ttl", "html", "txt")) {
+              if (!ok && !Utilities.existsInList(ext, "xml", "ttl", "html", "txt", "fml")) {
                 try {
-                  org.hl7.fhir.r5.elementmodel.Element e = new org.hl7.fhir.r5.elementmodel.JsonParser(context).parseSingle(new FileInputStream(fn));
-                  addFile(res, f, e, "application/fhir+json");
-                  count++;
-                  ok = true;
+                  List<NamedElement> el = new org.hl7.fhir.r5.elementmodel.JsonParser(context).parse(new FileInputStream(fn));
+                  if (el.size() == 1) {
+                    addFile(res, f, el.get(0).getElement(), "application/fhir+json");
+                    count++;
+                    ok = true;
+                  }
                 } catch (Exception e) {
                   if (!f.getName().startsWith("Binary-")) { // we don't notify here because Binary is special. 
                     log.logMessage(e.getMessage() +" loading "+f);
-                    e.printStackTrace();
+//                    e.printStackTrace();
                   }
                 }
               }
-              if (!ok && !Utilities.existsInList(ext, "json", "xml", "html", "txt")) {
+              if (!ok && !Utilities.existsInList(ext, "json", "xml", "html", "txt", "fml")) {
                 try {
                   org.hl7.fhir.r5.elementmodel.Element e = new org.hl7.fhir.r5.elementmodel.TurtleParser(context).parseSingle(new FileInputStream(fn));
                   addFile(res, f, e, "application/fhir+turtle");
@@ -345,7 +360,23 @@ public class SimpleFetcher implements IFetchFile {
                 } catch (Exception e) {
                   if (!f.getName().startsWith("Binary-")) { // we don't notify here because Binary is special. 
                     log.logMessage(e.getMessage() +" loading "+f);
-                    e.printStackTrace();
+//                    e.printStackTrace();
+                  }
+                }
+              }              
+              if (!ok && !Utilities.existsInList(ext, "json", "xml", "html", "txt")) {
+                try {
+                  if (fp==null) {
+                    fp = new FmlParser(context);
+                  }
+                  org.hl7.fhir.r5.elementmodel.Element e  = fp.parse(new FileInputStream(f)).get(0).getElement();
+                  addFile(res, f, e, "fml");
+                  count++;
+                  ok = true;
+                } catch (Exception e) {
+                  if (!f.getName().startsWith("Binary-")) { // we don't notify here because Binary is special. 
+                    log.logMessage(e.getMessage() +" loading "+f);
+//                    e.printStackTrace();
                   }
                 }
               }
@@ -356,6 +387,15 @@ public class SimpleFetcher implements IFetchFile {
       log.logDebugMessage(LogCategory.PROGRESS, "Loaded "+Integer.toString(count)+" files from "+s);
     }
     return res;
+  }
+
+  private List<String> fixedFileTypes() {
+    return Utilities.strings(
+        // known file types we have parsers for
+        "json", "ttl", "html", "txt", "fml", 
+        
+        // known files types to not even try parsing
+        "jpg", "png", "gif", "mp3", "mp4", "pfd", "doc", "docx", "ppt", "pptx", "svg");
   }
 
   private void addFile(List<FetchedFile> res, File f, org.hl7.fhir.r5.elementmodel.Element e, String cnt) throws IOException {
@@ -410,6 +450,20 @@ public class SimpleFetcher implements IFetchFile {
   @Override
   public String openAsString(String filename) throws IOException {
     return TextFile.fileToString(filename);
+  }
+
+  @Override
+  public void scanFolders(String dir, List<String> dirs) {
+    scanFolders(new File(dir), dirs);
+  }
+  
+  public void scanFolders(File dir, List<String> dirs) {
+    dirs.add(dir.getAbsolutePath());
+    for (File f : dir.listFiles()) {
+      if (f.isDirectory()) {
+        scanFolders(f, dirs);
+      }
+    }    
   }
 
   

@@ -47,10 +47,11 @@ public class JsonXhtmlRenderer extends TranslatingUtilities implements JsonCreat
   }
   private List<LevelInfo> levels = new ArrayList<LevelInfo>();
   private String href;
+  private List<String> comments = new ArrayList<>();
   
   @Override
-  public void setIndent(String indent) {
-    this.indent = indent;
+  public void comment(String contents) {
+    comments.add(contents);
   }
 
   private boolean prism;
@@ -69,17 +70,30 @@ public class JsonXhtmlRenderer extends TranslatingUtilities implements JsonCreat
     if (b == null) {
       b = new StringBuilder();
       if (prism) {
-        b.append("<pre class=\"json\"><code class=\"language-json\">\r\n");
+        b.append("<pre class=\"json\" style=\"white-space: pre; overflow: hidden\"><code class=\"language-json\">\r\n");
       } else {
-        b.append("<pre class=\"json\"><code>\r\n");
+        b.append("<pre class=\"json\" style=\"white-space: pre; overflow: hidden\"><code>\r\n");
       }
     }
+    commitComments();
     levels.add(0, new LevelInfo(false));
     b.append("{\r\n");
     for (int i = 0; i < levels.size(); i++) 
       b.append(indent);
   }
 
+  
+
+  private void commitComments() {
+    for (String s : comments) {
+      b.append("<span style=\"font-style: italic; color: grey\">// ");
+      b.append(Utilities.escapeXml(s));
+      b.append("</span>\r\n");
+      for (int i = 0; i < levels.size(); i++) 
+        b.append(indent);      
+    }
+    comments.clear();
+  }
 
   @Override
   public void endObject() throws IOException {
